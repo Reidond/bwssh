@@ -1,0 +1,11 @@
+[Unit]
+Description=Bitwarden SSH Agent Socket
+Documentation=https://github.com/reidond/bwssh
+
+[Socket]
+ListenStream=%t/bwssh/agent.sock
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target

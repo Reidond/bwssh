@@ -1,0 +1,15 @@
+[Unit]
+Description=Bitwarden SSH Agent
+Documentation=https://github.com/reidond/bwssh
+Requires=bwssh-agent.socket
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/bwssh-agentd --foreground
+Restart=on-failure
+UMask=0077
+Environment="XDG_RUNTIME_DIR=%t"
+
+[Install]
+Also=bwssh-agent.socket
+WantedBy=default.target
