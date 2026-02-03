@@ -450,7 +450,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_per_connection_mode_caches_by_connection_id(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
@@ -471,7 +470,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_per_connection_mode_different_keys_same_connection(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
@@ -486,7 +484,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_ttl_mode_caches_by_fingerprint_and_exe(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -502,7 +499,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_ttl_mode_different_fingerprints(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -517,7 +513,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_ttl_mode_different_exe_paths(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -532,7 +527,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_ttl_mode_expires_after_ttl(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=1)
 
@@ -554,7 +548,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_forwarded_connection_always_bypasses_cache(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
@@ -569,7 +562,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_forwarded_bypasses_cache_in_ttl_mode(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -583,7 +575,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_clear_cache_removes_all_entries(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
@@ -603,7 +594,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_clear_cache_in_ttl_mode(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -620,7 +610,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_denied_authorization_not_cached(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=False)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
@@ -636,7 +625,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_ttl_mode_with_none_exe_path(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
 
@@ -651,7 +639,6 @@ class TestCachingAuthorizer:
 
     @pytest.mark.asyncio
     async def test_per_connection_uses_connection_id(self) -> None:
-
         underlying = CountingAuthorizer(always_allow=True)
         caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
 
