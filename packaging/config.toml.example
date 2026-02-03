@@ -1,0 +1,54 @@
+# bwssh configuration file
+# Location: ${XDG_CONFIG_HOME:-~/.config}/bwssh/config.toml
+
+[daemon]
+# Runtime directory for sockets and PID file.
+# Default: $XDG_RUNTIME_DIR/bwssh (or /tmp/bwssh-$UID if XDG_RUNTIME_DIR not set)
+# runtime_dir = "/run/user/1000/bwssh"
+
+# Socket file names (relative to runtime_dir)
+agent_socket = "agent.sock"
+control_socket = "control.sock"
+
+# Log level: DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
+
+[bitwarden]
+# Path to bw CLI executable
+bw_path = "bw"
+
+# Discovery mode: "explicit" (list item_ids) or "query" (future)
+mode = "explicit"
+
+# Bitwarden item IDs containing SSH keys
+# Get IDs from: bw list items --session <session_key>
+item_ids = []
+
+# Query-based discovery (future, not implemented in MVP)
+# mode = "query"
+# query = "tag:ssh OR type:sshkey"
+# collection_ids = []
+
+[auth]
+# Authorization caching mode:
+# - "always": prompt for every sign request (no caching)
+# - "per_connection": authorize once per agent connection
+# - "ttl": authorize once per (key fingerprint + exe path) for N seconds
+approval_mode = "per_connection"
+
+# TTL for "ttl" mode (seconds)
+approval_ttl_seconds = 300
+
+# Deny signing when the daemon believes the request is via forwarded agent.
+# If false, forwarded requests are allowed (not recommended).
+deny_forwarded_by_default = true
+
+[ssh]
+# Allowed key types
+allow_ed25519 = true
+allow_ecdsa = true
+allow_rsa = true
+
+# Prefer RSA SHA-2 signatures (RFC 8332) when the request flags allow it.
+# If false, use SHA-1 for legacy compatibility (not recommended).
+prefer_rsa_sha2 = true

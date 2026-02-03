@@ -2,9 +2,9 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
-
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -28,10 +28,11 @@ def ecdsa_key_path() -> Path:
 
 
 @pytest.fixture
-def expected_values() -> dict:
+def expected_values() -> dict[str, Any]:
     """Load expected fingerprints and key types from JSON."""
-    with open(FIXTURES_DIR / "expected.json") as f:
-        return json.load(f)
+    with (FIXTURES_DIR / "expected.json").open() as f:
+        result: dict[str, Any] = json.load(f)
+        return result
 
 
 @pytest.fixture
@@ -39,9 +40,9 @@ def all_test_keys(
     ed25519_key_path: Path,
     rsa_key_path: Path,
     ecdsa_key_path: Path,
-    expected_values: dict,
+    expected_values: dict[str, Any],
 ) -> list[tuple[Path, str, str]]:
-    """List of (key_path, expected_fingerprint, expected_type) tuples for all test keys."""
+    """List of (key_path, fingerprint, key_type) tuples."""
     return [
         (
             ed25519_key_path,

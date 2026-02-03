@@ -9,10 +9,20 @@ import stat
 from typing import TYPE_CHECKING
 
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa, utils
 
 from bwssh import constants
-from bwssh.agent_proto import read_message, unpack_uint32, write_message
+from bwssh.agent_proto import (
+    pack_string,
+    pack_uint32,
+    read_message,
+    unpack_string,
+    unpack_uint32,
+    write_message,
+)
 from bwssh.daemon import AgentServer
+from bwssh.keys import get_public_key_blob, load_private_key
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -158,13 +168,36 @@ class TestMessageDispatch:
             await task
 
     @pytest.mark.asyncio
-    async def test_sign_request_returns_failure(
+    async def test_sign_request_unknown_key_returns_failure(
         self, server: AgentServer, socket_path: Path
     ) -> None:
         task = await _start_server(server)
         try:
             reader, writer = await _connect(socket_path)
-            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, b"\x00" * 20)
+            unknown_blob = b"\xde\xad" * 16
+            request = (
+                pack_string(unknown_blob)
+                + pack_string(b"data to sign")
+                + pack_uint32(0)
+            )
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, payload = await read_message(reader)
+            assert msg_type == constants.SSH_AGENT_FAILURE
+            assert payload == b""
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_sign_request_malformed_payload_returns_failure(
+        self, server: AgentServer, socket_path: Path
+    ) -> None:
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, b"\x00" * 3)
             msg_type, payload = await read_message(reader)
             assert msg_type == constants.SSH_AGENT_FAILURE
             assert payload == b""
@@ -331,3 +364,315 @@ class TestSignalHandling:
             assert not socket_path.exists()
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+
+
+class TestIdentitiesAnswer:
+    @pytest.mark.asyncio
+    async def test_single_key_identity(
+        self, runtime_dir: Path, socket_path: Path, ed25519_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "test-ed25519", "test")
+
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, offset = unpack_uint32(payload, 0)
+            assert nkeys == 1
+
+            blob, offset = unpack_string(payload, offset)
+            comment, offset = unpack_string(payload, offset)
+
+            expected_blob = get_public_key_blob(
+                load_private_key(ed25519_key_path.read_bytes())
+            )
+            assert blob == expected_blob
+            assert comment == b"test-ed25519"
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_multiple_keys(
+        self,
+        runtime_dir: Path,
+        socket_path: Path,
+        ed25519_key_path: Path,
+        rsa_key_path: Path,
+        ecdsa_key_path: Path,
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "key-ed25519", "test")
+        server.load_key(rsa_key_path, "key-rsa", "test")
+        server.load_key(ecdsa_key_path, "key-ecdsa", "test")
+
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, offset = unpack_uint32(payload, 0)
+            assert nkeys == 3
+
+            blobs: list[bytes] = []
+            comments: list[bytes] = []
+            for _ in range(nkeys):
+                blob, offset = unpack_string(payload, offset)
+                comment, offset = unpack_string(payload, offset)
+                blobs.append(blob)
+                comments.append(comment)
+
+            assert set(comments) == {b"key-ed25519", b"key-rsa", b"key-ecdsa"}
+            assert offset == len(payload)
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_empty_registry_returns_zero_keys(
+        self, server: AgentServer, socket_path: Path
+    ) -> None:
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, offset = unpack_uint32(payload, 0)
+            assert nkeys == 0
+            assert offset == len(payload)
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_ssh_add_list_shows_key(
+        self, runtime_dir: Path, socket_path: Path, ed25519_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "smoke-test-key", "test")
+
+        task = await _start_server(server)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ssh-add",
+                "-L",
+                env={**os.environ, "SSH_AUTH_SOCK": str(socket_path)},
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            assert proc.returncode == 0, f"ssh-add -L failed: {stderr.decode()}"
+            output = stdout.decode()
+            assert "ssh-ed25519" in output
+            assert "smoke-test-key" in output
+        finally:
+            server.shutdown()
+            await task
+
+
+class TestSignRequest:
+    async def _get_key_blob(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> bytes:
+        await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+        msg_type, payload = await read_message(reader)
+        assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+        nkeys, offset = unpack_uint32(payload, 0)
+        assert nkeys >= 1
+        key_blob, _offset = unpack_string(payload, offset)
+        return key_blob
+
+    @pytest.mark.asyncio
+    async def test_ed25519_sign_request(
+        self, runtime_dir: Path, socket_path: Path, ed25519_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "test-ed25519", "test")
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            key_blob = await self._get_key_blob(reader, writer)
+
+            data_to_sign = b"hello from test"
+            request = pack_string(key_blob) + pack_string(data_to_sign) + pack_uint32(0)
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
+            sig_blob, _ = unpack_string(payload, 0)
+
+            algo, offset = unpack_string(sig_blob, 0)
+            sig, _ = unpack_string(sig_blob, offset)
+            assert algo == b"ssh-ed25519"
+
+            private_key = load_private_key(ed25519_key_path.read_bytes())
+            assert isinstance(private_key, ed25519.Ed25519PrivateKey)
+            private_key.public_key().verify(sig, data_to_sign)
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_rsa_sha256_sign_request(
+        self, runtime_dir: Path, socket_path: Path, rsa_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(rsa_key_path, "test-rsa", "test")
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            key_blob = await self._get_key_blob(reader, writer)
+
+            data_to_sign = b"rsa test data"
+            request = (
+                pack_string(key_blob)
+                + pack_string(data_to_sign)
+                + pack_uint32(constants.SSH_AGENT_RSA_SHA2_256)
+            )
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
+            sig_blob, _ = unpack_string(payload, 0)
+
+            algo, offset = unpack_string(sig_blob, 0)
+            sig, _ = unpack_string(sig_blob, offset)
+            assert algo == b"rsa-sha2-256"
+
+            private_key = load_private_key(rsa_key_path.read_bytes())
+            assert isinstance(private_key, rsa.RSAPrivateKey)
+            private_key.public_key().verify(
+                sig, data_to_sign, padding.PKCS1v15(), hashes.SHA256()
+            )
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_rsa_sha512_sign_request(
+        self, runtime_dir: Path, socket_path: Path, rsa_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(rsa_key_path, "test-rsa", "test")
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            key_blob = await self._get_key_blob(reader, writer)
+
+            data_to_sign = b"rsa 512 test"
+            request = (
+                pack_string(key_blob)
+                + pack_string(data_to_sign)
+                + pack_uint32(constants.SSH_AGENT_RSA_SHA2_512)
+            )
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
+            sig_blob, _ = unpack_string(payload, 0)
+
+            algo, offset = unpack_string(sig_blob, 0)
+            sig, _ = unpack_string(sig_blob, offset)
+            assert algo == b"rsa-sha2-512"
+
+            private_key = load_private_key(rsa_key_path.read_bytes())
+            assert isinstance(private_key, rsa.RSAPrivateKey)
+            private_key.public_key().verify(
+                sig, data_to_sign, padding.PKCS1v15(), hashes.SHA512()
+            )
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_ecdsa_sign_request(
+        self, runtime_dir: Path, socket_path: Path, ecdsa_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ecdsa_key_path, "test-ecdsa", "test")
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            key_blob = await self._get_key_blob(reader, writer)
+
+            data_to_sign = b"ecdsa test data"
+            request = pack_string(key_blob) + pack_string(data_to_sign) + pack_uint32(0)
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, payload = await read_message(reader)
+
+            assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
+            sig_blob, _ = unpack_string(payload, 0)
+
+            algo, offset = unpack_string(sig_blob, 0)
+            raw_sig, _ = unpack_string(sig_blob, offset)
+            assert algo == b"ecdsa-sha2-nistp256"
+
+            r_bytes, off = unpack_string(raw_sig, 0)
+            s_bytes, _ = unpack_string(raw_sig, off)
+            r = int.from_bytes(r_bytes, byteorder="big")
+            s = int.from_bytes(s_bytes, byteorder="big")
+
+            der_sig = utils.encode_dss_signature(r, s)
+            private_key = load_private_key(ecdsa_key_path.read_bytes())
+            assert isinstance(private_key, ec.EllipticCurvePrivateKey)
+            private_key.public_key().verify(
+                der_sig, data_to_sign, ec.ECDSA(hashes.SHA256())
+            )
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_sign_then_list_still_works(
+        self, runtime_dir: Path, socket_path: Path, ed25519_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "test-ed25519", "test")
+        task = await _start_server(server)
+        try:
+            reader, writer = await _connect(socket_path)
+            key_blob = await self._get_key_blob(reader, writer)
+
+            request = pack_string(key_blob) + pack_string(b"data") + pack_uint32(0)
+            await write_message(writer, constants.SSH_AGENTC_SIGN_REQUEST, request)
+            msg_type, _ = await read_message(reader)
+            assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
+
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, _ = await read_message(reader)
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server.shutdown()
+            await task
