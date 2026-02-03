@@ -20,6 +20,7 @@ from bwssh.agent_proto import (
     unpack_uint32,
     write_message,
 )
+from bwssh.config import BwsshConfig, load_config
 from bwssh.constants import (
     SSH_AGENT_FAILURE,
     SSH_AGENT_IDENTITIES_ANSWER,
@@ -27,6 +28,7 @@ from bwssh.constants import (
     SSH_AGENTC_REQUEST_IDENTITIES,
     SSH_AGENTC_SIGN_REQUEST,
 )
+from bwssh.control import ControlServer
 from bwssh.keys import (
     Identity,
     KeyRegistry,
@@ -57,6 +59,7 @@ class AgentServer:
         self,
         runtime_dir: Path | None = None,
         polkit: Authorizer | None = None,
+        config: BwsshConfig | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir or _default_runtime_dir()
         self._socket_path = self._runtime_dir / _SOCKET_NAME
@@ -64,6 +67,8 @@ class AgentServer:
         self._shutdown_event: asyncio.Event | None = None
         self._registry = KeyRegistry()
         self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
+        self._config = config or BwsshConfig()
+        self._control_server: ControlServer | None = None
 
     @property
     def socket_path(self) -> Path:
@@ -188,7 +193,7 @@ class AgentServer:
         sig_blob = build_signature_blob(algorithm, signature_bytes)
         await write_message(writer, SSH_AGENT_SIGN_RESPONSE, pack_string(sig_blob))
 
-    async def serve(self) -> None:
+    async def serve(self, *, start_control: bool = False) -> None:
         self._shutdown_event = asyncio.Event()
         self._prepare_runtime_dir()
         self._remove_stale_socket()
@@ -200,10 +205,23 @@ class AgentServer:
 
         logger.info("Starting bwssh-agentd on socket: %s", self._socket_path)
 
+        control_task: asyncio.Task[None] | None = None
+        if start_control:
+            self._control_server = ControlServer(
+                runtime_dir=self._runtime_dir,
+                registry=self._registry,
+                config=self._config,
+            )
+            control_task = asyncio.create_task(self._control_server.serve())
+
         try:
             await self._shutdown_event.wait()
         finally:
             logger.info("Shutting down bwssh-agentd")
+            if self._control_server is not None:
+                self._control_server.shutdown()
+            if control_task is not None:
+                await control_task
             self._server.close()
             await self._server.wait_closed()
             if self._socket_path.exists():
@@ -244,7 +262,9 @@ def main_entry() -> None:
 
     setup_logging(args.log_level)
 
-    server = AgentServer(runtime_dir=args.runtime_dir)
+    config = load_config()
+    runtime_dir = args.runtime_dir or config.daemon.runtime_dir
+    server = AgentServer(runtime_dir=runtime_dir, config=config)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -253,6 +273,6 @@ def main_entry() -> None:
         loop.add_signal_handler(sig, server.shutdown)
 
     try:
-        loop.run_until_complete(server.serve())
+        loop.run_until_complete(server.serve(start_control=True))
     finally:
         loop.close()
