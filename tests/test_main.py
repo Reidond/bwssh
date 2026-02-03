@@ -1,12 +1,8 @@
-"""Tests for bwssh.main module."""
+"""Tests for bwssh.main module — verify redirect to cli."""
 
-import pytest
+from bwssh.cli import main as cli_main
+from bwssh.main import main as main_func
 
-from bwssh.main import main
 
-
-def test_main(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test main function prints expected output."""
-    main()
-    captured = capsys.readouterr()
-    assert "Hello from bwssh!" in captured.out
+def test_main_is_cli_main() -> None:
+    assert main_func is cli_main

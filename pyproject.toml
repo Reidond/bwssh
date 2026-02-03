@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bwssh = "bwssh.main:main"
+bwssh = "bwssh.cli:main"
 bwssh-agentd = "bwssh.daemon:main_entry"
 
 [dependency-groups]

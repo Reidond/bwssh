@@ -1,14 +1,12 @@
-"""Main entry point for bwssh."""
+"""Legacy entry point — redirects to cli.main."""
 
 import logging
 
+from bwssh.cli import main
+
+__all__ = ["main"]
+
 logger = logging.getLogger(__name__)
-
-
-def main() -> None:
-    """Run the main application."""
-    print("Hello from bwssh!")
-
 
 if __name__ == "__main__":
     main()
