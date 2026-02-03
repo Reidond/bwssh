@@ -1,0 +1,14 @@
+{
+  "ed25519": {
+    "fingerprint": "SHA256:NYC9KCknoQAUwP+P4/G0MGz72digTy+cfxcuOCnmgbg",
+    "key_type": "ssh-ed25519"
+  },
+  "rsa": {
+    "fingerprint": "SHA256:MuowC/mOlGP5VyOtwj/HpbmdZbkkWSeLtZ8OM0eMyKA",
+    "key_type": "ssh-rsa"
+  },
+  "ecdsa": {
+    "fingerprint": "SHA256:lDP3uiQyEf+WigkEQ66B1FDone2JUl19a3Yp0eRrM80",
+    "key_type": "ecdsa-sha2-nistp256"
+  }
+}
