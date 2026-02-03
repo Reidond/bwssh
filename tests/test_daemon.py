@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from bwssh import constants
-from bwssh.agent_proto import read_message, write_message
+from bwssh.agent_proto import read_message, unpack_uint32, write_message
 from bwssh.daemon import AgentServer
 
 if TYPE_CHECKING:
@@ -140,7 +140,7 @@ class TestRuntimeDirectory:
 
 class TestMessageDispatch:
     @pytest.mark.asyncio
-    async def test_request_identities_returns_failure(
+    async def test_request_identities_returns_identities_answer(
         self, server: AgentServer, socket_path: Path
     ) -> None:
         task = await _start_server(server)
@@ -148,8 +148,9 @@ class TestMessageDispatch:
             reader, writer = await _connect(socket_path)
             await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
             msg_type, payload = await read_message(reader)
-            assert msg_type == constants.SSH_AGENT_FAILURE
-            assert payload == b""
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, _ = unpack_uint32(payload, 0)
+            assert nkeys == 0
             writer.close()
             await writer.wait_closed()
         finally:
@@ -234,7 +235,7 @@ class TestMessageDispatch:
                     writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b""
                 )
                 msg_type, _payload = await read_message(reader)
-                assert msg_type == constants.SSH_AGENT_FAILURE
+                assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
             writer.close()
             await writer.wait_closed()
         finally:
@@ -258,7 +259,7 @@ class TestClientDisconnect:
             reader2, writer2 = await _connect(socket_path)
             await write_message(writer2, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
             msg_type, _ = await read_message(reader2)
-            assert msg_type == constants.SSH_AGENT_FAILURE
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
             writer2.close()
             await writer2.wait_closed()
         finally:
@@ -282,7 +283,7 @@ class TestClientDisconnect:
             reader2, writer2 = await _connect(socket_path)
             await write_message(writer2, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
             msg_type, _ = await read_message(reader2)
-            assert msg_type == constants.SSH_AGENT_FAILURE
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
             writer2.close()
             await writer2.wait_closed()
         finally:
@@ -307,7 +308,7 @@ class TestConcurrentConnections:
                 return msg_type
 
             results = await asyncio.gather(*[client_session(i) for i in range(10)])
-            assert all(r == constants.SSH_AGENT_FAILURE for r in results)
+            assert all(r == constants.SSH_AGENT_IDENTITIES_ANSWER for r in results)
         finally:
             server.shutdown()
             await task

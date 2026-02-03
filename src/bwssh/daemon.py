@@ -10,8 +10,12 @@ import signal
 import sys
 from pathlib import Path
 
-from bwssh.agent_proto import read_message, write_message
-from bwssh.constants import SSH_AGENT_FAILURE
+from bwssh.agent_proto import pack_uint32, read_message, write_message
+from bwssh.constants import (
+    SSH_AGENT_FAILURE,
+    SSH_AGENT_IDENTITIES_ANSWER,
+    SSH_AGENTC_REQUEST_IDENTITIES,
+)
 
 _SOCKET_NAME = "agent.sock"
 
@@ -49,8 +53,13 @@ class AgentServer:
     ) -> None:
         try:
             while True:
-                _msg_type, _payload = await read_message(reader)
-                await write_message(writer, SSH_AGENT_FAILURE, b"")
+                msg_type, _payload = await read_message(reader)
+                if msg_type == SSH_AGENTC_REQUEST_IDENTITIES:
+                    # Return IDENTITIES_ANSWER with empty key list (nkeys=0)
+                    response = pack_uint32(0)
+                    await write_message(writer, SSH_AGENT_IDENTITIES_ANSWER, response)
+                else:
+                    await write_message(writer, SSH_AGENT_FAILURE, b"")
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
             pass
         finally:
