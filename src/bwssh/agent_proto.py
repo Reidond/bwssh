@@ -11,11 +11,14 @@ SSH string format:
 
 from __future__ import annotations
 
+import logging
 import struct
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import asyncio
+
+logger = logging.getLogger(__name__)
 
 _UINT32 = struct.Struct(">I")
 

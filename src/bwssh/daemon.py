@@ -35,7 +35,9 @@ from bwssh.keys import (
     get_public_key_blob,
     load_private_key,
 )
-from bwssh.peercred import build_connection_context
+from bwssh.logging_config import setup_logging
+from bwssh.peercred import ConnectionContext, build_connection_context
+from bwssh.polkit import ACTION_SIGN, Authorizer, MockPolkitAuthorizer, build_details
 from bwssh.signing import build_signature_blob, sign_data
 
 logger = logging.getLogger(__name__)
@@ -51,12 +53,17 @@ def _default_runtime_dir() -> Path:
 
 
 class AgentServer:
-    def __init__(self, runtime_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        runtime_dir: Path | None = None,
+        polkit: Authorizer | None = None,
+    ) -> None:
         self._runtime_dir = runtime_dir or _default_runtime_dir()
         self._socket_path = self._runtime_dir / _SOCKET_NAME
         self._server: asyncio.Server | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._registry = KeyRegistry()
+        self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
 
     @property
     def socket_path(self) -> Path:
@@ -95,6 +102,12 @@ class AgentServer:
         if sock is not None:
             try:
                 _conn_ctx = build_connection_context(sock)
+                logger.info(
+                    "Client connected: pid=%d, uid=%d, exe=%s",
+                    _conn_ctx.peer_pid,
+                    _conn_ctx.peer_uid,
+                    _conn_ctx.exe_path or "unknown",
+                )
             except OSError:
                 logger.warning("Failed to get peer credentials", exc_info=True)
 
@@ -109,7 +122,7 @@ class AgentServer:
                         response += pack_string(ident.comment.encode("utf-8"))
                     await write_message(writer, SSH_AGENT_IDENTITIES_ANSWER, response)
                 elif msg_type == SSH_AGENTC_SIGN_REQUEST:
-                    await self._handle_sign_request(writer, payload)
+                    await self._handle_sign_request(writer, payload, _conn_ctx)
                 else:
                     await write_message(writer, SSH_AGENT_FAILURE, b"")
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
@@ -119,7 +132,10 @@ class AgentServer:
             await writer.wait_closed()
 
     async def _handle_sign_request(
-        self, writer: asyncio.StreamWriter, payload: bytes
+        self,
+        writer: asyncio.StreamWriter,
+        payload: bytes,
+        conn_ctx: ConnectionContext | None = None,
     ) -> None:
         try:
             key_blob, offset = unpack_string(payload, 0)
@@ -131,14 +147,43 @@ class AgentServer:
 
         private_key = self._registry.get_private_key(key_blob)
         if private_key is None:
+            logger.warning("Sign request for unknown key")
             await write_message(writer, SSH_AGENT_FAILURE, b"")
             return
+
+        identity = self._registry.get_identity(key_blob)
+        fingerprint = identity.fingerprint if identity else "unknown"
+        comment = identity.comment if identity else "unknown"
+
+        if conn_ctx is not None:
+            details = build_details(fingerprint, comment, conn_ctx)
+            authorized = await self._polkit.check_authorization(
+                ACTION_SIGN, conn_ctx, details
+            )
+            if not authorized:
+                logger.info(
+                    "Sign request denied by polkit: fingerprint=%s, pid=%d",
+                    fingerprint,
+                    conn_ctx.peer_pid,
+                )
+                await write_message(writer, SSH_AGENT_FAILURE, b"")
+                return
 
         try:
             signature_bytes, algorithm = sign_data(private_key, data, flags)
         except (ValueError, TypeError):
+            logger.error("Sign operation failed for key=%s", fingerprint)
             await write_message(writer, SSH_AGENT_FAILURE, b"")
             return
+
+        if conn_ctx is not None:
+            logger.info(
+                "Sign operation: fingerprint=%s, peer_pid=%d, peer_exe=%s, "
+                "result=allow",
+                fingerprint,
+                conn_ctx.peer_pid,
+                conn_ctx.exe_path or "unknown",
+            )
 
         sig_blob = build_signature_blob(algorithm, signature_bytes)
         await write_message(writer, SSH_AGENT_SIGN_RESPONSE, pack_string(sig_blob))
@@ -153,9 +198,12 @@ class AgentServer:
         )
         self._socket_path.chmod(0o600)
 
+        logger.info("Starting bwssh-agentd on socket: %s", self._socket_path)
+
         try:
             await self._shutdown_event.wait()
         finally:
+            logger.info("Shutting down bwssh-agentd")
             self._server.close()
             await self._server.wait_closed()
             if self._socket_path.exists():
@@ -182,11 +230,19 @@ def main_entry() -> None:
         default=None,
         help="Override runtime directory path",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        help="Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
     args = parser.parse_args()
 
     if not args.foreground:
         print("error: only --foreground mode is supported", file=sys.stderr)
         sys.exit(1)
+
+    setup_logging(args.log_level)
 
     server = AgentServer(runtime_dir=args.runtime_dir)
 

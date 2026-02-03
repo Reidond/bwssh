@@ -4,10 +4,13 @@ Loads configuration from ${XDG_CONFIG_HOME:-~/.config}/bwssh/config.toml
 with sensible defaults and environment variable overrides.
 """
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

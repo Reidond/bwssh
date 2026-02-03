@@ -6,6 +6,7 @@ SSH-format signature blobs per IETF draft-miller-ssh-agent §4.5.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from cryptography.hazmat.primitives import hashes
@@ -16,6 +17,8 @@ from bwssh.constants import SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512
 
 if TYPE_CHECKING:
     from bwssh.keys import PrivateKeyTypes
+
+logger = logging.getLogger(__name__)
 
 
 def sign_ed25519(private_key: ed25519.Ed25519PrivateKey, data: bytes) -> bytes:

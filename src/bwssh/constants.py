@@ -5,6 +5,10 @@ Per IETF draft-miller-ssh-agent-17 and OpenSSH PROTOCOL.agent.
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 SSH_AGENT_FAILURE: int = 5
 SSH_AGENT_SUCCESS: int = 6
 

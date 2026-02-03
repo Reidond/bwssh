@@ -1,5 +1,9 @@
 """Main entry point for bwssh."""
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
     """Run the main application."""
