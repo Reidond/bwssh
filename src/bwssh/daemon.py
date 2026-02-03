@@ -20,6 +20,7 @@ from bwssh.agent_proto import (
     unpack_uint32,
     write_message,
 )
+from bwssh.bitwarden import BitwardenLike, BitwardenProvider
 from bwssh.config import BwsshConfig, load_config
 from bwssh.constants import (
     SSH_AGENT_FAILURE,
@@ -39,7 +40,13 @@ from bwssh.keys import (
 )
 from bwssh.logging_config import setup_logging
 from bwssh.peercred import ConnectionContext, build_connection_context
-from bwssh.polkit import ACTION_SIGN, Authorizer, MockPolkitAuthorizer, build_details
+from bwssh.polkit import (
+    ACTION_SIGN,
+    Authorizer,
+    CachingAuthorizer,
+    MockPolkitAuthorizer,
+    build_details,
+)
 from bwssh.signing import build_signature_blob, sign_data
 
 logger = logging.getLogger(__name__)
@@ -60,6 +67,7 @@ class AgentServer:
         runtime_dir: Path | None = None,
         polkit: Authorizer | None = None,
         config: BwsshConfig | None = None,
+        bitwarden: BitwardenLike | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir or _default_runtime_dir()
         self._socket_path = self._runtime_dir / _SOCKET_NAME
@@ -68,18 +76,21 @@ class AgentServer:
         self._registry = KeyRegistry()
         self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
         self._config = config or BwsshConfig()
-        self._control_server: ControlServer | None = None
+        self._bitwarden = bitwarden
 
     @property
     def socket_path(self) -> Path:
         return self._socket_path
+
+    @property
+    def registry(self) -> KeyRegistry:
+        return self._registry
 
     def _prepare_runtime_dir(self) -> None:
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         self._runtime_dir.chmod(0o700)
 
     def load_key(self, key_path: Path, comment: str, source: str = "test") -> None:
-        """Load a private key from *key_path* into the agent registry."""
         key_data = key_path.read_bytes()
         private_key = load_private_key(key_data)
         blob = get_public_key_blob(private_key)
@@ -92,6 +103,16 @@ class AgentServer:
             source=source,
         )
         self._registry.add_key(identity, private_key)
+
+    def load_key_from_bytes(self, key_data: bytes, identity: Identity) -> None:
+        private_key = load_private_key(key_data)
+        self._registry.add_key(identity, private_key)
+
+    def lock(self) -> None:
+        self._registry.clear()
+        if self._bitwarden is not None:
+            self._bitwarden.lock()
+        logger.info("Agent locked: keys cleared")
 
     def _remove_stale_socket(self) -> None:
         if not self._socket_path.exists():
@@ -193,7 +214,7 @@ class AgentServer:
         sig_blob = build_signature_blob(algorithm, signature_bytes)
         await write_message(writer, SSH_AGENT_SIGN_RESPONSE, pack_string(sig_blob))
 
-    async def serve(self, *, start_control: bool = False) -> None:
+    async def serve(self) -> None:
         self._shutdown_event = asyncio.Event()
         self._prepare_runtime_dir()
         self._remove_stale_socket()
@@ -205,23 +226,11 @@ class AgentServer:
 
         logger.info("Starting bwssh-agentd on socket: %s", self._socket_path)
 
-        control_task: asyncio.Task[None] | None = None
-        if start_control:
-            self._control_server = ControlServer(
-                runtime_dir=self._runtime_dir,
-                registry=self._registry,
-                config=self._config,
-            )
-            control_task = asyncio.create_task(self._control_server.serve())
-
         try:
             await self._shutdown_event.wait()
         finally:
             logger.info("Shutting down bwssh-agentd")
-            if self._control_server is not None:
-                self._control_server.shutdown()
-            if control_task is not None:
-                await control_task
+            self._registry.clear()
             self._server.close()
             await self._server.wait_closed()
             if self._socket_path.exists():
@@ -230,6 +239,12 @@ class AgentServer:
     def shutdown(self) -> None:
         if self._shutdown_event is not None:
             self._shutdown_event.set()
+
+
+async def _main_async(agent_server: AgentServer, control_server: ControlServer) -> None:
+    agent_task = asyncio.create_task(agent_server.serve())
+    control_task = asyncio.create_task(control_server.serve())
+    await asyncio.gather(agent_task, control_task)
 
 
 def main_entry() -> None:
@@ -251,7 +266,7 @@ def main_entry() -> None:
     parser.add_argument(
         "--log-level",
         type=str,
-        default="INFO",
+        default=None,
         help="Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
     args = parser.parse_args()
@@ -260,19 +275,54 @@ def main_entry() -> None:
         print("error: only --foreground mode is supported", file=sys.stderr)
         sys.exit(1)
 
-    setup_logging(args.log_level)
-
     config = load_config()
-    runtime_dir = args.runtime_dir or config.daemon.runtime_dir
-    server = AgentServer(runtime_dir=runtime_dir, config=config)
+    log_level = args.log_level or config.daemon.log_level
+    setup_logging(log_level)
+
+    runtime_dir = (
+        args.runtime_dir or config.daemon.runtime_dir or _default_runtime_dir()
+    )
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_dir.chmod(0o700)
+
+    pid_file = runtime_dir / "daemon.pid"
+    pid_file.write_text(str(os.getpid()))
+    logger.info("PID file written: %s (pid=%d)", pid_file, os.getpid())
+
+    bw_provider = BitwardenProvider(config.bitwarden.bw_path, config.bitwarden.item_ids)
+    polkit_auth = MockPolkitAuthorizer(always_allow=True)
+    caching_auth = CachingAuthorizer(
+        polkit_auth, config.auth.approval_mode, config.auth.approval_ttl_seconds
+    )
+
+    agent_server = AgentServer(
+        runtime_dir=runtime_dir,
+        polkit=caching_auth,
+        config=config,
+        bitwarden=bw_provider,
+    )
+    control_server = ControlServer(
+        runtime_dir=runtime_dir,
+        agent_server=agent_server,
+        bitwarden=bw_provider,
+        config=config,
+    )
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    def _shutdown_handler() -> None:
+        logger.info("Received shutdown signal, stopping daemon")
+        agent_server.shutdown()
+        control_server.shutdown()
+
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, server.shutdown)
+        loop.add_signal_handler(sig, _shutdown_handler)
 
     try:
-        loop.run_until_complete(server.serve(start_control=True))
+        loop.run_until_complete(_main_async(agent_server, control_server))
     finally:
         loop.close()
+        if pid_file.exists():
+            pid_file.unlink()
+        logger.info("Daemon stopped, PID file removed")

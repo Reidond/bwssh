@@ -10,13 +10,14 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
-from bwssh.config import load_config
+from bwssh.config import BwsshConfig, load_config
+from bwssh.keys import KeyRegistry
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from bwssh.config import BwsshConfig
-    from bwssh.keys import KeyRegistry
+    from bwssh.bitwarden import BitwardenLike
+    from bwssh.daemon import AgentServer
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +39,26 @@ class ControlServer:
     def __init__(
         self,
         runtime_dir: Path,
-        registry: KeyRegistry,
-        config: BwsshConfig,
+        registry: KeyRegistry | None = None,
+        config: BwsshConfig | None = None,
+        agent_server: AgentServer | None = None,
+        bitwarden: BitwardenLike | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir
         self._socket_path = runtime_dir / _CONTROL_SOCKET_NAME
         self._server: asyncio.Server | None = None
         self._shutdown_event: asyncio.Event | None = None
-        self._registry = registry
-        self._config = config
+        self._agent_server = agent_server
+        self._bitwarden = bitwarden
+
+        if agent_server is not None:
+            self._registry: KeyRegistry = agent_server.registry
+        elif registry is not None:
+            self._registry = registry
+        else:
+            self._registry = KeyRegistry()
+
+        self._config = config or BwsshConfig()
         self._start_time = time.monotonic()
         self._locked = False
         self._methods: dict[str, Any] = {
@@ -154,15 +166,49 @@ class ControlServer:
         return {"keys": keys}
 
     async def _handle_lock(self, _params: dict[str, Any]) -> dict[str, Any]:
-        self._registry.clear()
+        if self._agent_server is not None:
+            self._agent_server.lock()
+        else:
+            self._registry.clear()
+        if self._bitwarden is not None:
+            self._bitwarden.lock()
         self._locked = True
         return {"locked": True}
 
-    async def _handle_unlock(self, _params: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_unlock(self, params: dict[str, Any]) -> dict[str, Any]:
+        session_key = params.get("session_key")
+        if (
+            self._bitwarden is not None
+            and session_key
+            and self._agent_server is not None
+        ):
+            self._bitwarden.unlock(session_key)
+            identities = await self._bitwarden.list_identities(session_key)
+            for identity in identities:
+                key_data = await self._bitwarden.get_private_key(
+                    identity.identity_id, session_key
+                )
+                self._agent_server.load_key_from_bytes(key_data, identity)
+            self._locked = False
+            return {"unlocked": True, "key_count": len(identities)}
         self._locked = False
         return {"unlocked": True}
 
-    async def _handle_sync(self, _params: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_sync(self, params: dict[str, Any]) -> dict[str, Any]:
+        session_key = params.get("session_key")
+        if (
+            self._bitwarden is not None
+            and session_key
+            and self._agent_server is not None
+        ):
+            identities = await self._bitwarden.list_identities(session_key)
+            self._registry.clear()
+            for identity in identities:
+                key_data = await self._bitwarden.get_private_key(
+                    identity.identity_id, session_key
+                )
+                self._agent_server.load_key_from_bytes(key_data, identity)
+            return {"synced": True, "key_count": len(identities)}
         return {"synced": True}
 
     async def _handle_reload_config(self, _params: dict[str, Any]) -> dict[str, Any]:

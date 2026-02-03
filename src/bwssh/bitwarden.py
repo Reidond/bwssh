@@ -7,11 +7,26 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from bwssh.keys import Identity, compute_fingerprint
 
 logger = logging.getLogger(__name__)
+
+
+class BitwardenLike(Protocol):
+    """Protocol for Bitwarden provider implementations."""
+
+    async def list_identities(self, session_key: str) -> list[Identity]: ...
+
+    async def get_private_key(self, identity_id: str, session_key: str) -> bytes: ...
+
+    def lock(self) -> None: ...
+
+    def unlock(self, session_key: str) -> None: ...
+
+    async def healthcheck(self) -> bool: ...
+
 
 _BW_TIMEOUT_SECONDS = 10.0
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "tests" / "fixtures"

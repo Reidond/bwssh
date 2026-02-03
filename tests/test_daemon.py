@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import stat
@@ -21,8 +22,18 @@ from bwssh.agent_proto import (
     unpack_uint32,
     write_message,
 )
-from bwssh.daemon import AgentServer
-from bwssh.keys import get_public_key_blob, load_private_key
+from bwssh.bitwarden import MockBitwardenProvider
+from bwssh.config import BwsshConfig, DaemonConfig
+from bwssh.control import ControlServer
+from bwssh.daemon import AgentServer, _main_async
+from bwssh.keys import (
+    Identity,
+    compute_fingerprint,
+    get_key_type_string,
+    get_public_key_blob,
+    load_private_key,
+)
+from bwssh.polkit import MockPolkitAuthorizer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -668,11 +679,277 @@ class TestSignRequest:
             assert msg_type == constants.SSH_AGENT_SIGN_RESPONSE
 
             await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
-            msg_type, _ = await read_message(reader)
-            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            msg_type2, _ = await read_message(reader)
+            assert msg_type2 == constants.SSH_AGENT_IDENTITIES_ANSWER
 
             writer.close()
             await writer.wait_closed()
         finally:
             server.shutdown()
             await task
+
+
+class TestAgentServerLock:
+    @pytest.mark.asyncio
+    async def test_lock_clears_registry(
+        self, runtime_dir: Path, ed25519_key_path: Path
+    ) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key(ed25519_key_path, "test-key", "test")
+        assert len(server.registry.list_identities()) == 1
+
+        server.lock()
+        assert len(server.registry.list_identities()) == 0
+
+    @pytest.mark.asyncio
+    async def test_lock_calls_bitwarden_lock(self, runtime_dir: Path) -> None:
+        bw = MockBitwardenProvider()
+        bw.unlock("test-session")
+        assert bw._session_key == "test-session"
+
+        server = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        server.lock()
+        assert bw._session_key is None
+
+    @pytest.mark.asyncio
+    async def test_lock_without_bitwarden(self, runtime_dir: Path) -> None:
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.lock()
+        assert len(server.registry.list_identities()) == 0
+
+
+class TestLoadKeyFromBytes:
+    @pytest.mark.asyncio
+    async def test_load_key_from_bytes(
+        self, runtime_dir: Path, ed25519_key_path: Path
+    ) -> None:
+        key_data = ed25519_key_path.read_bytes()
+        private_key = load_private_key(key_data)
+        blob = get_public_key_blob(private_key)
+        identity = Identity(
+            identity_id="test-id",
+            comment="from-bytes",
+            public_key_blob=blob,
+            fingerprint=compute_fingerprint(blob),
+            algorithm=get_key_type_string(private_key),
+            source="test",
+        )
+
+        server = AgentServer(runtime_dir=runtime_dir)
+        server.load_key_from_bytes(key_data, identity)
+
+        identities = server.registry.list_identities()
+        assert len(identities) == 1
+        assert identities[0].comment == "from-bytes"
+
+
+class TestPidFile:
+    @pytest.mark.asyncio
+    async def test_pid_file_written_on_start(self, tmp_path: Path) -> None:
+        runtime_dir = tmp_path / "bwssh-pid-test"
+        runtime_dir.mkdir()
+        pid_file = runtime_dir / "daemon.pid"
+        pid_file.write_text(str(os.getpid()))
+
+        assert pid_file.exists()
+        assert pid_file.read_text() == str(os.getpid())
+
+    @pytest.mark.asyncio
+    async def test_pid_file_removed_on_cleanup(self, tmp_path: Path) -> None:
+        runtime_dir = tmp_path / "bwssh-pid-cleanup"
+        runtime_dir.mkdir()
+        pid_file = runtime_dir / "daemon.pid"
+        pid_file.write_text(str(os.getpid()))
+
+        assert pid_file.exists()
+        pid_file.unlink()
+        assert not pid_file.exists()
+
+
+class TestMainAsync:
+    @pytest.mark.asyncio
+    async def test_main_async_both_servers_run(self, tmp_path: Path) -> None:
+        runtime_dir = tmp_path / "main-async-test"
+        config = BwsshConfig(daemon=DaemonConfig(runtime_dir=runtime_dir))
+
+        agent = AgentServer(runtime_dir=runtime_dir, config=config)
+        control = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            config=config,
+        )
+
+        task = asyncio.create_task(_main_async(agent, control))
+        await asyncio.sleep(0.1)
+
+        try:
+            assert agent.socket_path.exists()
+            assert control.socket_path.exists()
+
+            reader, writer = await asyncio.open_unix_connection(str(agent.socket_path))
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, _ = await read_message(reader)
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            writer.close()
+            await writer.wait_closed()
+
+            ctrl_reader, ctrl_writer = await asyncio.open_unix_connection(
+                str(control.socket_path)
+            )
+            request = (
+                json.dumps({"method": "status", "id": 1, "params": {}}).encode() + b"\n"
+            )
+            ctrl_writer.write(request)
+            await ctrl_writer.drain()
+            resp_line = await ctrl_reader.readline()
+            resp = json.loads(resp_line.decode())
+            assert "result" in resp
+            assert resp["result"]["pid"] == os.getpid()
+            ctrl_writer.close()
+            await ctrl_writer.wait_closed()
+        finally:
+            agent.shutdown()
+            control.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_main_async_signal_shuts_both_down(self, tmp_path: Path) -> None:
+        runtime_dir = tmp_path / "signal-test"
+        config = BwsshConfig(daemon=DaemonConfig(runtime_dir=runtime_dir))
+
+        agent = AgentServer(runtime_dir=runtime_dir, config=config)
+        control = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            config=config,
+        )
+
+        loop = asyncio.get_running_loop()
+
+        def _handler() -> None:
+            agent.shutdown()
+            control.shutdown()
+
+        loop.add_signal_handler(signal.SIGTERM, _handler)
+        try:
+            task = asyncio.create_task(_main_async(agent, control))
+            await asyncio.sleep(0.1)
+
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.sleep(0.1)
+
+            await asyncio.wait_for(task, timeout=2.0)
+            assert not agent.socket_path.exists()
+            assert not control.socket_path.exists()
+        finally:
+            loop.remove_signal_handler(signal.SIGTERM)
+
+
+class TestDaemonIntegration:
+    @pytest.mark.asyncio
+    async def test_full_lifecycle_with_bitwarden(self, tmp_path: Path) -> None:
+        runtime_dir = tmp_path / "full-lifecycle"
+        config = BwsshConfig(daemon=DaemonConfig(runtime_dir=runtime_dir))
+        bw = MockBitwardenProvider()
+        polkit = MockPolkitAuthorizer(always_allow=True)
+
+        agent = AgentServer(
+            runtime_dir=runtime_dir,
+            polkit=polkit,
+            config=config,
+            bitwarden=bw,
+        )
+        control = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+
+        task = asyncio.create_task(_main_async(agent, control))
+        await asyncio.sleep(0.1)
+
+        try:
+            ctrl_reader, ctrl_writer = await asyncio.open_unix_connection(
+                str(control.socket_path)
+            )
+            unlock_req = (
+                json.dumps(
+                    {
+                        "method": "unlock",
+                        "id": 1,
+                        "params": {"session_key": "test-session"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            ctrl_writer.write(unlock_req)
+            await ctrl_writer.drain()
+            resp_line = await ctrl_reader.readline()
+            resp = json.loads(resp_line.decode())
+            assert resp["result"]["unlocked"] is True
+            assert resp["result"]["key_count"] == 1
+            ctrl_writer.close()
+            await ctrl_writer.wait_closed()
+
+            reader, writer = await asyncio.open_unix_connection(str(agent.socket_path))
+            await write_message(writer, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, payload = await read_message(reader)
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, _ = unpack_uint32(payload, 0)
+            assert nkeys == 1
+            writer.close()
+            await writer.wait_closed()
+
+            ctrl_reader2, ctrl_writer2 = await asyncio.open_unix_connection(
+                str(control.socket_path)
+            )
+            lock_req = (
+                json.dumps(
+                    {
+                        "method": "lock",
+                        "id": 2,
+                        "params": {},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            ctrl_writer2.write(lock_req)
+            await ctrl_writer2.drain()
+            resp_line2 = await ctrl_reader2.readline()
+            resp2 = json.loads(resp_line2.decode())
+            assert resp2["result"]["locked"] is True
+            ctrl_writer2.close()
+            await ctrl_writer2.wait_closed()
+
+            reader2, writer2 = await asyncio.open_unix_connection(
+                str(agent.socket_path)
+            )
+            await write_message(writer2, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type3, payload2 = await read_message(reader2)
+            assert msg_type3 == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys2, _ = unpack_uint32(payload2, 0)
+            assert nkeys2 == 0
+            writer2.close()
+            await writer2.wait_closed()
+        finally:
+            agent.shutdown()
+            control.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_keys(
+        self, tmp_path: Path, ed25519_key_path: Path
+    ) -> None:
+        runtime_dir = tmp_path / "shutdown-clear"
+        agent = AgentServer(runtime_dir=runtime_dir)
+        agent.load_key(ed25519_key_path, "test-key", "test")
+        assert len(agent.registry.list_identities()) == 1
+
+        task = asyncio.create_task(agent.serve())
+        await asyncio.sleep(0.05)
+
+        agent.shutdown()
+        await task
+
+        assert len(agent.registry.list_identities()) == 0
