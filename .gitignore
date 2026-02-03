@@ -101,3 +101,5 @@ Thumbs.db
 
 # Project specific
 *.log
+
+.sisyphus/
