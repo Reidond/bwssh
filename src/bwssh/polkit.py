@@ -8,6 +8,7 @@ unavailable or any error occurs, authorization is denied.
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Protocol
 
 import dbus_fast
@@ -141,3 +142,98 @@ class MockPolkitAuthorizer:
     ) -> bool:
         self.calls.append((action_id, connection_ctx, details))
         return self._always_allow
+
+
+class CachingAuthorizer:
+    """Wraps an Authorizer with configurable caching policy.
+
+    Three modes:
+    - always: No caching, every request goes through
+    - per_connection: Cache by connection ID (first auth per connection)
+    - ttl: Cache by (fingerprint, exe_path) with time-based expiry
+
+    Forwarded connections always bypass cache regardless of mode.
+    """
+
+    def __init__(self, underlying: Authorizer, mode: str, ttl_seconds: int) -> None:
+        self._underlying = underlying
+        self._mode = mode
+        self._ttl_seconds = ttl_seconds
+        self._per_connection_cache: set[int] = set()
+        self._ttl_cache: dict[tuple[str, str | None], float] = {}
+
+    async def check_authorization(
+        self,
+        action_id: str,
+        connection_ctx: ConnectionContext,
+        details: dict[str, str],
+    ) -> bool:
+        if connection_ctx.is_forwarded or self._mode == "always":
+            return await self._underlying.check_authorization(
+                action_id, connection_ctx, details
+            )
+
+        if self._mode == "per_connection":
+            return await self._check_per_connection(action_id, connection_ctx, details)
+
+        if self._mode == "ttl":
+            return await self._check_ttl(action_id, connection_ctx, details)
+
+        return await self._underlying.check_authorization(
+            action_id, connection_ctx, details
+        )
+
+    async def _check_per_connection(
+        self,
+        action_id: str,
+        connection_ctx: ConnectionContext,
+        details: dict[str, str],
+    ) -> bool:
+        conn_id = id(connection_ctx)
+        if conn_id in self._per_connection_cache:
+            logger.debug(
+                "Authorization cached for connection pid=%d",
+                connection_ctx.peer_pid,
+            )
+            return True
+
+        result = await self._underlying.check_authorization(
+            action_id, connection_ctx, details
+        )
+        if result:
+            self._per_connection_cache.add(conn_id)
+        return result
+
+    async def _check_ttl(
+        self,
+        action_id: str,
+        connection_ctx: ConnectionContext,
+        details: dict[str, str],
+    ) -> bool:
+        fingerprint = details.get("bwssh.key_fingerprint", "")
+        exe_path = connection_ctx.exe_path
+        cache_key = (fingerprint, exe_path)
+
+        if cache_key in self._ttl_cache:
+            cached_time = self._ttl_cache[cache_key]
+            if time.time() - cached_time < self._ttl_seconds:
+                logger.debug(
+                    "Authorization cached for key=%s exe=%s",
+                    fingerprint,
+                    exe_path,
+                )
+                return True
+            del self._ttl_cache[cache_key]
+
+        result = await self._underlying.check_authorization(
+            action_id, connection_ctx, details
+        )
+        if result:
+            self._ttl_cache[cache_key] = time.time()
+        return result
+
+    def clear_cache(self) -> None:
+        """Clear all cached authorizations."""
+        self._per_connection_cache.clear()
+        self._ttl_cache.clear()
+        logger.info("Authorization cache cleared")

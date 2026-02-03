@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,6 +25,7 @@ from bwssh.polkit import (
     ACTION_LIST,
     ACTION_SIGN,
     ACTION_UNLOCK,
+    CachingAuthorizer,
     MockPolkitAuthorizer,
     PolkitAuthorizer,
     build_details,
@@ -265,6 +266,25 @@ async def _get_key_blob(
     return key_blob
 
 
+class CountingAuthorizer:
+    """Test double that counts authorization calls."""
+
+    def __init__(self, always_allow: bool = True) -> None:
+        self._always_allow = always_allow
+        self.call_count = 0
+        self.calls: list[tuple[str, ConnectionContext, dict[str, str]]] = []
+
+    async def check_authorization(
+        self,
+        action_id: str,
+        connection_ctx: ConnectionContext,
+        details: dict[str, str],
+    ) -> bool:
+        self.call_count += 1
+        self.calls.append((action_id, connection_ctx, details))
+        return self._always_allow
+
+
 class TestDaemonPolkitIntegration:
     @pytest.mark.asyncio
     async def test_sign_allowed_by_polkit(
@@ -408,3 +428,238 @@ class TestDaemonPolkitIntegration:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+class TestCachingAuthorizer:
+    @pytest.mark.asyncio
+    async def test_always_mode_never_caches(self) -> None:
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="always", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        result1 = await caching.check_authorization(ACTION_SIGN, ctx, details)
+        result2 = await caching.check_authorization(ACTION_SIGN, ctx, details)
+        result3 = await caching.check_authorization(ACTION_SIGN, ctx, details)
+
+        assert result1 is True
+        assert result2 is True
+        assert result3 is True
+        assert underlying.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_per_connection_mode_caches_by_connection_id(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx1 = _make_conn_ctx(pid=100)
+        ctx2 = _make_conn_ctx(pid=200)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+
+        assert underlying.call_count == 1
+
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_per_connection_mode_different_keys_same_connection(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100)
+        details1 = {"bwssh.key_fingerprint": "SHA256:key1"}
+        details2 = {"bwssh.key_fingerprint": "SHA256:key2"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details1)
+        await caching.check_authorization(ACTION_SIGN, ctx, details2)
+
+        assert underlying.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ttl_mode_caches_by_fingerprint_and_exe(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx1 = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh")
+        ctx2 = _make_conn_ctx(pid=200, exe_path="/usr/bin/ssh")
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+
+        assert underlying.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ttl_mode_different_fingerprints(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh")
+        details1 = {"bwssh.key_fingerprint": "SHA256:key1"}
+        details2 = {"bwssh.key_fingerprint": "SHA256:key2"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details1)
+        await caching.check_authorization(ACTION_SIGN, ctx, details2)
+
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_ttl_mode_different_exe_paths(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx1 = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh")
+        ctx2 = _make_conn_ctx(pid=100, exe_path="/usr/bin/git")
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_ttl_mode_expires_after_ttl(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=1)
+
+        ctx = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh")
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        with patch("time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            await caching.check_authorization(ACTION_SIGN, ctx, details)
+            assert underlying.call_count == 1
+
+            mock_time.return_value = 1000.5
+            await caching.check_authorization(ACTION_SIGN, ctx, details)
+            assert underlying.call_count == 1
+
+            mock_time.return_value = 1001.1
+            await caching.check_authorization(ACTION_SIGN, ctx, details)
+            assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_forwarded_connection_always_bypasses_cache(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100, is_forwarded=True)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+
+        assert underlying.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_forwarded_bypasses_cache_in_ttl_mode(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh", is_forwarded=True)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_removes_all_entries(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        assert underlying.call_count == 1
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        assert underlying.call_count == 1
+
+        caching.clear_cache()
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_in_ttl_mode(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100, exe_path="/usr/bin/ssh")
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        assert underlying.call_count == 1
+
+        caching.clear_cache()
+
+        await caching.check_authorization(ACTION_SIGN, ctx, details)
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_denied_authorization_not_cached(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=False)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx = _make_conn_ctx(pid=100)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        result1 = await caching.check_authorization(ACTION_SIGN, ctx, details)
+        result2 = await caching.check_authorization(ACTION_SIGN, ctx, details)
+
+        assert result1 is False
+        assert result2 is False
+        assert underlying.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_ttl_mode_with_none_exe_path(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="ttl", ttl_seconds=300)
+
+        ctx1 = _make_conn_ctx(pid=100, exe_path=None)
+        ctx2 = _make_conn_ctx(pid=200, exe_path=None)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+
+        assert underlying.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_per_connection_uses_connection_id(self) -> None:
+
+        underlying = CountingAuthorizer(always_allow=True)
+        caching = CachingAuthorizer(underlying, mode="per_connection", ttl_seconds=300)
+
+        ctx1 = _make_conn_ctx(pid=100)
+        ctx2 = _make_conn_ctx(pid=100)
+        details = {"bwssh.key_fingerprint": "SHA256:abc"}
+
+        await caching.check_authorization(ACTION_SIGN, ctx1, details)
+        await caching.check_authorization(ACTION_SIGN, ctx2, details)
+
+        assert underlying.call_count == 2
