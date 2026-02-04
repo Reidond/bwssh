@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import os
 import shutil
 import signal
@@ -115,6 +116,26 @@ def _systemd_user_dir() -> Path:
 
 
 def _run_bw_unlock() -> str | None:
+    # First, check if BW_SESSION is already set in the environment
+    session_from_env = os.environ.get("BW_SESSION")
+    if session_from_env:
+        # Validate the session is still valid
+        bw_path = shutil.which("bw") or "bw"
+        try:
+            result = subprocess.run(
+                [bw_path, "status", "--session", session_from_env],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                status = _json.loads(result.stdout)
+                if status.get("status") == "unlocked":
+                    return session_from_env
+        except (FileNotFoundError, OSError, ValueError):
+            pass  # Fall through to interactive unlock
+
+    # Fall back to interactive unlock
     bw_path = shutil.which("bw") or "bw"
     try:
         result = subprocess.run(
