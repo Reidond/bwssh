@@ -21,6 +21,7 @@ class DaemonConfig:
     agent_socket: str = "agent.sock"
     control_socket: str = "control.sock"
     log_level: str = "INFO"
+    lock_on_sleep: bool = True  # Auto-lock when system sleeps
 
 
 @dataclass
@@ -110,6 +111,9 @@ def load_config(path: Path | None = None) -> BwsshConfig:
                     "control_socket", config.daemon.control_socket
                 ),
                 log_level=daemon_data.get("log_level", config.daemon.log_level),
+                lock_on_sleep=daemon_data.get(
+                    "lock_on_sleep", config.daemon.lock_on_sleep
+                ),
             )
 
         # Parse bitwarden section

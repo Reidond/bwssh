@@ -13,6 +13,10 @@ control_socket = "control.sock"
 # Log level: DEBUG, INFO, WARNING, ERROR
 log_level = "INFO"
 
+# Auto-lock when system goes to sleep (lid close, suspend, etc.)
+# Recommended: true (default)
+lock_on_sleep = true
+
 [bitwarden]
 # Path to bw CLI executable
 bw_path = "bw"
@@ -35,7 +39,7 @@ item_ids = []
 # - true: Show desktop prompt for each sign request (requires polkit setup)
 #
 # To enable polkit:
-# 1. Install policy: bwssh install --polkit | sudo tee /etc/polkit-1/actions/io.github.reidond.bwssh.policy
+# 1. Install policy: bwssh install --polkit | sudo tee /usr/share/polkit-1/actions/io.github.reidond.bwssh.policy
 # 2. Set require_polkit = true
 # 3. Restart daemon: bwssh stop && bwssh start
 require_polkit = false

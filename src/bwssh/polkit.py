@@ -100,10 +100,12 @@ class PolkitAuthorizer:
                 },
             )
 
+            # Note: We pass empty details ({}) because only trusted callers (root)
+            # can pass details to polkit. The key info is logged separately.
             result = await authority.call_check_authorization(  # type: ignore[attr-defined]
                 subject,
                 action_id,
-                details,
+                {},  # Empty details - see note above
                 _ALLOW_USER_INTERACTION,
                 "",
             )

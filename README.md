@@ -50,17 +50,29 @@ ssh -T git@github.com
 
 Config file: `~/.config/bwssh/config.toml`
 
-### Required: Add Your SSH Keys
+### Quick Setup (Recommended)
 
-First, find your Bitwarden SSH key item IDs:
+The easiest way to configure bwssh is to use the init command:
 
 ```bash
-bw unlock
-export BW_SESSION="..."  # from unlock output
+# First, unlock Bitwarden
+export BW_SESSION=$(bw unlock --raw)
+
+# Then run init to auto-discover SSH keys
+bwssh config init
+```
+
+This will find all SSH keys in your Bitwarden vault and create a config file.
+
+### Manual Setup
+
+If you prefer to configure manually, first find your SSH key IDs:
+
+```bash
 bw list items | jq -r '.[] | select(.sshKey != null) | "\(.id) \(.name)"'
 ```
 
-Then add them to your config:
+Then create `~/.config/bwssh/config.toml`:
 
 ```toml
 [bitwarden]
@@ -107,8 +119,9 @@ allow_rsa = true
 
 By default, bwssh allows all local signing requests without prompts. Security comes from:
 
--   Your Bitwarden vault being locked when away (`bwssh lock`)
--   Forwarded agent requests being blocked by default
+-   **Auto-lock on sleep**: Keys are cleared when your laptop sleeps (enabled by default)
+-   **Forwarded agent blocking**: Remote servers can't use your keys
+-   **Manual lock**: Run `bwssh lock` when stepping away
 
 ### Polkit Prompts (Optional)
 
@@ -122,7 +135,7 @@ require_polkit = true
 This requires installing the polkit policy:
 
 ```bash
-bwssh install --polkit | sudo tee /etc/polkit-1/actions/io.github.reidond.bwssh.policy > /dev/null
+bwssh install --polkit | sudo tee /usr/share/polkit-1/actions/io.github.reidond.bwssh.policy > /dev/null
 ```
 
 See `docs/` for detailed polkit setup instructions.
@@ -130,15 +143,24 @@ See `docs/` for detailed polkit setup instructions.
 ## CLI Commands
 
 ```bash
-bwssh status
-bwssh start
-bwssh stop
-bwssh install --user-systemd
-bwssh install --polkit
-bwssh unlock
-bwssh lock
-bwssh sync
-bwssh keys
+# Daemon control
+bwssh start              # Start the agent daemon
+bwssh stop               # Stop the agent daemon
+bwssh status             # Show daemon status
+
+# Key management
+bwssh unlock             # Unlock vault and load keys
+bwssh lock               # Lock agent and clear keys
+bwssh sync               # Reload keys from Bitwarden
+bwssh keys               # List loaded SSH keys
+
+# Configuration
+bwssh config init        # Auto-discover SSH keys and create config
+bwssh config show        # Show current configuration
+
+# Installation
+bwssh install --user-systemd   # Install systemd user service
+bwssh install --polkit         # Print polkit policy file
 ```
 
 ## Documentation

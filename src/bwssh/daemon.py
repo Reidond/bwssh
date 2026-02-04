@@ -245,10 +245,60 @@ class AgentServer:
             self._shutdown_event.set()
 
 
-async def _main_async(agent_server: AgentServer, control_server: ControlServer) -> None:
-    agent_task = asyncio.create_task(agent_server.serve())
-    control_task = asyncio.create_task(control_server.serve())
-    await asyncio.gather(agent_task, control_task)
+async def _sleep_watcher(
+    agent_server: AgentServer, shutdown_event: asyncio.Event
+) -> None:
+    """Watch for system sleep events and lock the agent."""
+    try:
+        bus = MessageBus(bus_type=BusType.SYSTEM)
+        await asyncio.wait_for(bus.connect(), timeout=5.0)
+
+        # Subscribe to PrepareForSleep signal from logind
+        introspection = await asyncio.wait_for(
+            bus.introspect("org.freedesktop.login1", "/org/freedesktop/login1"),
+            timeout=5.0,
+        )
+        proxy = bus.get_proxy_object(
+            "org.freedesktop.login1", "/org/freedesktop/login1", introspection
+        )
+        manager = proxy.get_interface("org.freedesktop.login1.Manager")
+
+        def on_prepare_for_sleep(going_to_sleep: bool) -> None:
+            if going_to_sleep:
+                logger.info("System going to sleep, locking agent")
+                agent_server.lock()
+
+        manager.on_prepare_for_sleep(on_prepare_for_sleep)  # type: ignore[attr-defined]
+        logger.info("Sleep watcher active: will lock on system sleep")
+
+        # Wait until shutdown
+        await shutdown_event.wait()
+
+    except TimeoutError:
+        logger.info("Sleep watcher: D-Bus connection timed out (logind unavailable)")
+    except Exception:
+        logger.debug("Sleep watcher setup failed (non-critical)", exc_info=True)
+
+
+async def _main_async(
+    agent_server: AgentServer,
+    control_server: ControlServer,
+    lock_on_sleep: bool = False,
+) -> None:
+    shutdown_event = asyncio.Event()
+
+    async def agent_with_shutdown() -> None:
+        await agent_server.serve()
+        shutdown_event.set()
+
+    tasks: list[asyncio.Task[None]] = [
+        asyncio.create_task(agent_with_shutdown()),
+        asyncio.create_task(control_server.serve()),
+    ]
+    if lock_on_sleep:
+        tasks.append(asyncio.create_task(_sleep_watcher(agent_server, shutdown_event)))
+
+    await asyncio.gather(*tasks)
 
 
 def main_entry() -> None:
@@ -350,7 +400,9 @@ def main_entry() -> None:
         loop.add_signal_handler(sig, _shutdown_handler)
 
     try:
-        loop.run_until_complete(_main_async(agent_server, control_server))
+        loop.run_until_complete(
+            _main_async(agent_server, control_server, config.daemon.lock_on_sleep)
+        )
     finally:
         loop.close()
         if pid_file.exists():
