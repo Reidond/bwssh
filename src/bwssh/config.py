@@ -39,6 +39,7 @@ class AuthConfig:
     approval_mode: str = "per_connection"
     approval_ttl_seconds: int = 300
     deny_forwarded_by_default: bool = True
+    require_polkit: bool = False  # If true, deny all signing when polkit unavailable
 
 
 @dataclass
@@ -130,6 +131,9 @@ def load_config(path: Path | None = None) -> BwsshConfig:
                 ),
                 deny_forwarded_by_default=auth_data.get(
                     "deny_forwarded_by_default", config.auth.deny_forwarded_by_default
+                ),
+                require_polkit=auth_data.get(
+                    "require_polkit", config.auth.require_polkit
                 ),
             )
 

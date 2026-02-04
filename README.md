@@ -1,16 +1,15 @@
 # bwssh
 
-Bitwarden-backed SSH agent for Linux. bwssh runs a local SSH agent that signs
-using keys stored in Bitwarden, gates signing through polkit approvals, and
-integrates with systemd user services.
+Bitwarden-backed SSH agent for Linux. Store your SSH keys in Bitwarden and use
+them seamlessly with any SSH client.
 
 ## Features
 
--   Bitwarden CLI integration for SSH key material
--   OpenSSH-compatible agent socket at `${XDG_RUNTIME_DIR}/bwssh/agent.sock`
--   polkit authorization with process metadata
--   Approval caching modes: `always`, `per_connection`, `ttl`
--   Forwarded agent guardrails via `deny_forwarded_by_default`
+-   **Bitwarden integration**: SSH keys stored securely in your Bitwarden vault
+-   **Standard SSH agent**: Works with `ssh`, `git`, and any SSH client
+-   **Systemd integration**: Runs as a user service, starts on login
+-   **Forwarding protection**: Blocks remote servers from using your keys
+-   **Optional polkit prompts**: Desktop authorization popups (disabled by default)
 
 ## Requirements
 
@@ -49,43 +48,86 @@ ssh -T git@github.com
 
 ## Configuration
 
-Config file location:
+Config file: `~/.config/bwssh/config.toml`
 
-```
-${XDG_CONFIG_HOME:-~/.config}/bwssh/config.toml
+### Required: Add Your SSH Keys
+
+First, find your Bitwarden SSH key item IDs:
+
+```bash
+bw unlock
+export BW_SESSION="..."  # from unlock output
+bw list items | jq -r '.[] | select(.sshKey != null) | "\(.id) \(.name)"'
 ```
 
-Minimal example:
+Then add them to your config:
+
+```toml
+[bitwarden]
+bw_path = "/full/path/to/bw"  # Use 'which bw' to find this
+item_ids = [
+    "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",  # your-key-name
+]
+```
+
+### Full Config Example
 
 ```toml
 [daemon]
-agent_socket = "agent.sock"
-control_socket = "control.sock"
 log_level = "INFO"
 
 [bitwarden]
-bw_path = "bw"
-mode = "explicit"
-item_ids = []
+bw_path = "/usr/bin/bw"
+item_ids = [
+    "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+]
 
 [auth]
-approval_mode = "per_connection"
-approval_ttl_seconds = 300
+# Polkit authorization prompts (default: disabled)
+require_polkit = false
+
+# Block forwarded agent requests (recommended)
 deny_forwarded_by_default = true
 
 [ssh]
 allow_ed25519 = true
 allow_ecdsa = true
 allow_rsa = true
-prefer_rsa_sha2 = true
 ```
 
-Environment overrides:
+### Environment Variables
 
--   `BWSSH_RUNTIME_DIR`
--   `BWSSH_LOG_LEVEL`
+-   `BWSSH_RUNTIME_DIR`: Override socket directory
+-   `BWSSH_LOG_LEVEL`: Override log level
+-   `BW_SESSION`: Bitwarden session key (auto-detected by `bwssh unlock`)
 
-## CLI commands
+## Security
+
+### Default Mode
+
+By default, bwssh allows all local signing requests without prompts. Security comes from:
+
+-   Your Bitwarden vault being locked when away (`bwssh lock`)
+-   Forwarded agent requests being blocked by default
+
+### Polkit Prompts (Optional)
+
+For extra security, enable polkit to show desktop prompts for each signing request:
+
+```toml
+[auth]
+require_polkit = true
+```
+
+This requires installing the polkit policy:
+
+```bash
+bwssh install --polkit | sudo tee /etc/polkit-1/actions/io.github.reidond.bwssh.policy > /dev/null
+```
+
+See `docs/` for detailed polkit setup instructions.
+
+## CLI Commands
 
 ```bash
 bwssh status

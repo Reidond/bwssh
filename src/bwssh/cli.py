@@ -179,16 +179,35 @@ def status() -> None:
     uptime = _format_uptime(float(result.get("uptime", 0)))
     key_count = result.get("key_count", 0)
     locked = result.get("locked", False)
+    polkit_available = result.get("polkit_available", True)
+    polkit_error = result.get("polkit_error")
+
     state = (
         click.style("locked", fg="red")
         if locked
         else click.style("unlocked", fg="green")
     )
+    if polkit_available:
+        polkit_status = click.style("enabled", fg="green")
+    elif polkit_error:
+        polkit_status = click.style("failed", fg="red")
+    else:
+        polkit_status = click.style("disabled", fg="yellow")
 
     click.echo(f"Daemon PID:  {pid}")
     click.echo(f"Uptime:      {uptime}")
     click.echo(f"Keys loaded: {key_count}")
     click.echo(f"State:       {state}")
+    click.echo(f"Polkit:      {polkit_status}")
+
+    if polkit_error:
+        click.echo()
+        click.echo(
+            click.style("Warning: ", fg="red")
+            + "Polkit failed - sign requests will be denied."
+        )
+        click.echo(f"  Error: {polkit_error}")
+        click.echo("  Fix D-Bus/polkit configuration or set auth.require_polkit=false.")
 
 
 @main.command()

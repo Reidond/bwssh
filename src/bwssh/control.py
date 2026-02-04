@@ -43,6 +43,8 @@ class ControlServer:
         config: BwsshConfig | None = None,
         agent_server: AgentServer | None = None,
         bitwarden: BitwardenLike | None = None,
+        polkit_available: bool = True,
+        polkit_error: str | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir
         self._socket_path = runtime_dir / _CONTROL_SOCKET_NAME
@@ -50,6 +52,8 @@ class ControlServer:
         self._shutdown_event: asyncio.Event | None = None
         self._agent_server = agent_server
         self._bitwarden = bitwarden
+        self._polkit_available = polkit_available
+        self._polkit_error = polkit_error
 
         if agent_server is not None:
             self._registry: KeyRegistry = agent_server.registry
@@ -146,12 +150,16 @@ class ControlServer:
 
     async def _handle_status(self, _params: dict[str, Any]) -> dict[str, Any]:
         uptime = time.monotonic() - self._start_time
-        return {
+        result: dict[str, Any] = {
             "pid": os.getpid(),
             "uptime": uptime,
             "key_count": len(self._registry.list_identities()),
             "locked": self._locked,
+            "polkit_available": self._polkit_available,
         }
+        if self._polkit_error:
+            result["polkit_error"] = self._polkit_error
+        return result
 
     async def _handle_list_keys(self, _params: dict[str, Any]) -> dict[str, Any]:
         identities = self._registry.list_identities()

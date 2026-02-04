@@ -296,18 +296,31 @@ def main_entry() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    async def _connect_polkit() -> tuple[Authorizer, bool, str | None]:
+        """Connect to system D-Bus for polkit authorization."""
+        if not config.auth.require_polkit:
+            logger.info(
+                "Polkit disabled (require_polkit=false); "
+                "signing allowed without prompts."
+            )
+            return MockPolkitAuthorizer(always_allow=True), False, None
+
+        try:
+            bus = MessageBus(bus_type=BusType.SYSTEM)
+            await bus.connect()
+            return PolkitAuthorizer(bus), True, None
+        except Exception as e:
+            logger.warning(
+                "Failed to connect to system D-Bus for polkit; "
+                "sign requests will be denied. Run 'bwssh status' for details.",
+                exc_info=True,
+            )
+            return MockPolkitAuthorizer(always_allow=False), False, str(e)
+
     bw_provider = BitwardenProvider(config.bitwarden.bw_path, config.bitwarden.item_ids)
-    polkit_auth: Authorizer
-    try:
-        bus = MessageBus(bus_type=BusType.SYSTEM)
-        loop.run_until_complete(bus.connect())
-        polkit_auth = PolkitAuthorizer(bus)
-    except Exception:
-        logger.warning(
-            "Failed to connect to system D-Bus for polkit; allowing all sign requests",
-            exc_info=True,
-        )
-        polkit_auth = MockPolkitAuthorizer(always_allow=True)
+    polkit_auth, polkit_available, polkit_error = loop.run_until_complete(
+        _connect_polkit()
+    )
 
     caching_auth = CachingAuthorizer(
         polkit_auth, config.auth.approval_mode, config.auth.approval_ttl_seconds
@@ -324,6 +337,8 @@ def main_entry() -> None:
         agent_server=agent_server,
         bitwarden=bw_provider,
         config=config,
+        polkit_available=polkit_available,
+        polkit_error=polkit_error,
     )
 
     def _shutdown_handler() -> None:
