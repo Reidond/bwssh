@@ -189,8 +189,12 @@ class TestInstallCommand:
 class TestUnlockCommand:
     def test_unlock_success(self, runner: CliRunner) -> None:
         """Unlock sends request to daemon (daemon handles interactive prompt)."""
-        with patch(
-            "bwssh.cli._send_command", return_value={"unlocked": True, "key_count": 1}
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value="mock-session"),
+            patch(
+                "bwssh.cli._send_command",
+                return_value={"unlocked": True, "key_count": 1},
+            ),
         ):
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code == 0
@@ -207,18 +211,24 @@ class TestUnlockCommand:
         mock_send.assert_called_once_with("unlock", {"session_key": "my-secret-key"})
 
     def test_unlock_daemon_not_running(self, runner: CliRunner) -> None:
-        with patch(
-            "bwssh.cli._send_command",
-            side_effect=OSError("Connection refused"),
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value="mock-session"),
+            patch(
+                "bwssh.cli._send_command",
+                side_effect=OSError("Connection refused"),
+            ),
         ):
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code != 0
 
     def test_unlock_denied_by_polkit(self, runner: CliRunner) -> None:
         """Unlock denied by polkit shows appropriate error."""
-        with patch(
-            "bwssh.cli._send_command",
-            side_effect=ControlError(-32001, "Unlock denied by polkit"),
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value="mock-session"),
+            patch(
+                "bwssh.cli._send_command",
+                side_effect=ControlError(-32001, "Unlock denied by polkit"),
+            ),
         ):
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code != 0

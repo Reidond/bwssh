@@ -116,32 +116,13 @@ def _systemd_user_dir() -> Path:
 
 
 def _get_bw_session_from_env() -> str | None:
-    """Get BW_SESSION from environment and validate it.
+    """Get BW_SESSION from environment.
 
     This is used for backward compatibility with legacy workflows.
-    Returns None if not set or invalid.
+    Returns None if not set. Validation is skipped for speed - the daemon
+    will return an error if the session is invalid.
     """
-    session_from_env = os.environ.get("BW_SESSION")
-    if not session_from_env:
-        return None
-
-    # Validate the session is still valid
-    bw_path = shutil.which("bw") or "bw"
-    try:
-        result = subprocess.run(
-            [bw_path, "status", "--session", session_from_env],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            status = _json.loads(result.stdout)
-            if status.get("status") == "unlocked":
-                return session_from_env
-    except (FileNotFoundError, OSError, ValueError):
-        pass
-
-    return None
+    return os.environ.get("BW_SESSION") or None
 
 
 def _run_bw_unlock_interactive() -> str | None:

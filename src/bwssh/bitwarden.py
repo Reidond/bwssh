@@ -61,6 +61,7 @@ class BitwardenProvider:
         self._item_ids = item_ids
         self._session_key: str | None = None
         self._cached_identities: list[Identity] = []
+        self._private_key_cache: dict[str, bytes] = {}  # identity_id -> private key
 
     async def _run_bw(self, *args: str) -> Any:
         proc = await asyncio.create_subprocess_exec(
@@ -102,6 +103,12 @@ class BitwardenProvider:
             identity = self._parse_identity(item["id"], item["name"], public_key_str)
             identities.append(identity)
 
+            # Cache private key to avoid separate get_private_key calls
+            if "privateKey" in ssh_key:
+                self._private_key_cache[item["id"]] = ssh_key["privateKey"].encode(
+                    "utf-8"
+                )
+
         self._cached_identities = identities
         return identities
 
@@ -123,6 +130,13 @@ class BitwardenProvider:
         )
 
     async def get_private_key(self, identity_id: str, session_key: str) -> bytes:
+        # Return from cache if available (populated by list_identities)
+        if identity_id in self._private_key_cache:
+            logger.debug("Using cached private key for %s", identity_id)
+            return self._private_key_cache[identity_id]
+
+        # Fallback: fetch individually (slower path)
+        logger.debug("Fetching private key for %s (cache miss)", identity_id)
         item: dict[str, Any] = await self._run_bw(
             "get", "item", identity_id, "--session", session_key
         )
@@ -132,11 +146,16 @@ class BitwardenProvider:
             raise ValueError(msg)
 
         private_key_str: str = item["sshKey"]["privateKey"]
-        return private_key_str.encode("utf-8")
+        private_key_bytes = private_key_str.encode("utf-8")
+
+        # Cache for future use
+        self._private_key_cache[identity_id] = private_key_bytes
+        return private_key_bytes
 
     def lock(self) -> None:
         self._session_key = None
         self._cached_identities = []
+        self._private_key_cache.clear()
         logger.info("Bitwarden provider locked")
 
     def unlock(self, session_key: str) -> None:
@@ -299,6 +318,7 @@ class MockBitwardenProvider:
         self._session_key: str | None = None
         self._error = error
         self._cached_identities: list[Identity] = []
+        self._private_key_cache: dict[str, bytes] = {}
         self._mock_session_key = mock_session_key
 
     async def list_identities(self, _session_key: str) -> list[Identity]:
@@ -319,6 +339,7 @@ class MockBitwardenProvider:
     def lock(self) -> None:
         self._session_key = None
         self._cached_identities = []
+        self._private_key_cache.clear()
 
     def unlock(self, session_key: str) -> None:
         self._session_key = session_key
