@@ -15,7 +15,9 @@ class TestServiceFile:
         """Get path to service file."""
         return (
             Path(__file__).parent.parent
-            / "packaging"
+            / "src"
+            / "bwssh"
+            / "data"
             / "systemd"
             / "bwssh-agent.service"
         )
@@ -82,13 +84,13 @@ class TestServiceFile:
         parser.read(path)
         assert parser.get("Service", "Type") == "simple"
 
-    def test_service_exec_start_points_to_agentd(self) -> None:
-        """ExecStart should point to bwssh-agentd."""
+    def test_service_exec_start_is_template(self) -> None:
+        """ExecStart should use {exe_path} template placeholder."""
         path = self._get_service_path()
         parser = configparser.ConfigParser()
         parser.read(path)
         exec_start = parser.get("Service", "ExecStart", raw=True)
-        assert "bwssh-agentd" in exec_start
+        assert "{exe_path}" in exec_start
         assert "--foreground" in exec_start
 
     def test_service_has_restart_policy(self) -> None:
@@ -132,7 +134,9 @@ class TestSocketFile:
         """Get path to socket file."""
         return (
             Path(__file__).parent.parent
-            / "packaging"
+            / "src"
+            / "bwssh"
+            / "data"
             / "systemd"
             / "bwssh-agent.socket"
         )
@@ -228,7 +232,9 @@ class TestPolkitPolicy:
         """Get path to polkit policy file."""
         return (
             Path(__file__).parent.parent
-            / "packaging"
+            / "src"
+            / "bwssh"
+            / "data"
             / "polkit"
             / "io.github.reidond.bwssh.policy"
         )

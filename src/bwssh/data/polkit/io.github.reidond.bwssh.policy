@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policyconfig>
+    <vendor>bwssh</vendor>
+    <vendor_url>https://github.com/reidond/bwssh</vendor_url>
+
+    <action id="io.github.reidond.bwssh.sign">
+        <description>Use an SSH key from Bitwarden</description>
+        <message>Authentication is required to use an SSH key</message>
+        <defaults>
+            <allow_any>no</allow_any>
+            <allow_inactive>no</allow_inactive>
+            <allow_active>auth_self_keep</allow_active>
+        </defaults>
+    </action>
+
+    <action id="io.github.reidond.bwssh.unlock">
+        <description>Unlock Bitwarden SSH agent</description>
+        <message>Authentication is required to unlock the Bitwarden vault</message>
+        <defaults>
+            <allow_any>no</allow_any>
+            <allow_inactive>no</allow_inactive>
+            <allow_active>auth_self_keep</allow_active>
+        </defaults>
+    </action>
+
+    <action id="io.github.reidond.bwssh.list">
+        <description>List SSH identities</description>
+        <message>Authentication is required to list SSH keys</message>
+        <defaults>
+            <allow_any>no</allow_any>
+            <allow_inactive>no</allow_inactive>
+            <allow_active>yes</allow_active>
+        </defaults>
+    </action>
+</policyconfig>

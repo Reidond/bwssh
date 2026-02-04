@@ -5,7 +5,7 @@ Requires=bwssh-agent.socket
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/bwssh-agentd --foreground
+ExecStart={exe_path} --foreground
 Restart=on-failure
 UMask=0077
 Environment="XDG_RUNTIME_DIR=%t"

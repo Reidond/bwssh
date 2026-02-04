@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import time
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -19,63 +20,10 @@ from bwssh.control import ControlClient, ControlError
 
 _DAEMON_NOT_RUNNING = "Error: daemon not running. Start with: bwssh start"
 
-_SERVICE_UNIT = """\
-[Unit]
-Description=bwssh SSH agent daemon
-Documentation=https://github.com/reidond/bwssh
 
-[Service]
-Type=simple
-ExecStart={exe_path}
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-"""
-
-_SOCKET_UNIT = """\
-[Unit]
-Description=bwssh SSH agent socket
-
-[Socket]
-ListenStream=%t/bwssh/agent.sock
-SocketMode=0600
-DirectoryMode=0700
-
-[Install]
-WantedBy=sockets.target
-"""
-
-_POLKIT_POLICY = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE policyconfig PUBLIC
- "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
- "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
-<policyconfig>
-  <vendor>bwssh</vendor>
-  <vendor_url>https://github.com/reidond/bwssh</vendor_url>
-
-  <action id="io.github.reidond.bwssh.sign">
-    <description>Authorize SSH signing via bwssh agent</description>
-    <message>An application wants to use your SSH key</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
-    </defaults>
-  </action>
-
-  <action id="io.github.reidond.bwssh.unlock">
-    <description>Unlock Bitwarden session for bwssh</description>
-    <message>bwssh wants to unlock your Bitwarden vault</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
-    </defaults>
-  </action>
-</policyconfig>
-"""
+def _read_package_data(path: str) -> str:
+    """Read a file from the package data directory."""
+    return files("bwssh").joinpath("data", path).read_text()
 
 
 def _get_control_socket() -> Path:
@@ -266,10 +214,13 @@ def install(user_systemd: bool, polkit: bool) -> None:
         target.mkdir(parents=True, exist_ok=True)
 
         exe_path = shutil.which("bwssh-agentd") or "bwssh-agentd"
+        service_template = _read_package_data("systemd/bwssh-agent.service")
         (target / "bwssh-agent.service").write_text(
-            _SERVICE_UNIT.format(exe_path=exe_path)
+            service_template.format(exe_path=exe_path)
         )
-        (target / "bwssh-agent.socket").write_text(_SOCKET_UNIT)
+        (target / "bwssh-agent.socket").write_text(
+            _read_package_data("systemd/bwssh-agent.socket")
+        )
 
         click.echo(f"Installed systemd units to {target}")
         click.echo(
@@ -278,7 +229,7 @@ def install(user_systemd: bool, polkit: bool) -> None:
         )
 
     if polkit:
-        click.echo(_POLKIT_POLICY)
+        click.echo(_read_package_data("polkit/io.github.reidond.bwssh.policy"))
         click.echo("Save to /etc/polkit-1/actions/io.github.reidond.bwssh.policy")
 
 
