@@ -115,32 +115,50 @@ def _systemd_user_dir() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
 
 
-def _run_bw_unlock() -> str | None:
-    # First, check if BW_SESSION is already set in the environment
-    session_from_env = os.environ.get("BW_SESSION")
-    if session_from_env:
-        # Validate the session is still valid
-        bw_path = shutil.which("bw") or "bw"
-        try:
-            result = subprocess.run(
-                [bw_path, "status", "--session", session_from_env],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                status = _json.loads(result.stdout)
-                if status.get("status") == "unlocked":
-                    return session_from_env
-        except (FileNotFoundError, OSError, ValueError):
-            pass  # Fall through to interactive unlock
+def _get_bw_session_from_env() -> str | None:
+    """Get BW_SESSION from environment and validate it.
 
-    # Fall back to interactive unlock
+    This is used for backward compatibility with legacy workflows.
+    Returns None if not set or invalid.
+    """
+    session_from_env = os.environ.get("BW_SESSION")
+    if not session_from_env:
+        return None
+
+    # Validate the session is still valid
     bw_path = shutil.which("bw") or "bw"
     try:
         result = subprocess.run(
-            [bw_path, "unlock", "--raw"],
+            [bw_path, "status", "--session", session_from_env],
             capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            status = _json.loads(result.stdout)
+            if status.get("status") == "unlocked":
+                return session_from_env
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+
+    return None
+
+
+def _run_bw_unlock_interactive() -> str | None:
+    """Run bw unlock interactively and return the session key.
+
+    This runs in the CLI process with access to the user's terminal,
+    so password input works correctly.
+    """
+    bw_path = shutil.which("bw") or "bw"
+    try:
+        # Run bw unlock with inherited stdin/stderr for interactive prompt
+        # Only capture stdout to get the session key
+        result = subprocess.run(
+            [bw_path, "unlock", "--raw"],
+            stdin=None,  # Inherit stdin for password input
+            stdout=subprocess.PIPE,  # Capture session key
+            stderr=None,  # Inherit stderr for prompts
             text=True,
             check=False,
         )
@@ -281,20 +299,42 @@ def install(user_systemd: bool, polkit: bool) -> None:
 
 
 @main.command()
-def unlock() -> None:
-    """Unlock Bitwarden vault and load keys."""
-    session_key = _run_bw_unlock()
+@click.option(
+    "--session",
+    "session_key",
+    default=None,
+    help="Use provided session key instead of interactive unlock",
+)
+def unlock(session_key: str | None) -> None:
+    """Unlock Bitwarden vault and load keys.
+
+    Prompts for your Bitwarden master password, then loads SSH keys
+    from your vault into the agent.
+    """
+    # Check for BW_SESSION env var if no --session provided
     if session_key is None:
-        click.echo("Error: failed to unlock Bitwarden vault.", err=True)
-        raise SystemExit(1)
+        session_key = _get_bw_session_from_env()
 
+    # If still no session, run interactive unlock
+    if session_key is None:
+        session_key = _run_bw_unlock_interactive()
+        if session_key is None:
+            click.echo("Error: failed to unlock Bitwarden vault.", err=True)
+            raise SystemExit(1)
+
+    # Send session key to daemon over secure Unix socket
     try:
-        _send_command("unlock", {"session_key": session_key})
-    except (ControlError, OSError) as e:
+        result = _send_command("unlock", {"session_key": session_key})
+        key_count = result.get("key_count", 0)
+        click.echo(f"Vault unlocked. {key_count} key(s) loaded.")
+    except ControlError as e:
+        if "denied by polkit" in str(e).lower():
+            click.echo("Error: unlock denied by polkit authorization.", err=True)
+        else:
+            click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1) from None
+    except OSError as e:
         _handle_control_error(e)
-        return
-
-    click.echo("Vault unlocked. Keys loaded.")
 
 
 @main.command()
@@ -311,14 +351,22 @@ def lock() -> None:
 
 @main.command()
 def sync() -> None:
-    """Sync keys from Bitwarden."""
-    try:
-        _send_command("sync")
-    except (ControlError, OSError) as e:
-        _handle_control_error(e)
-        return
+    """Sync keys from Bitwarden.
 
-    click.echo("Sync complete.")
+    Requires the agent to be unlocked first.
+    """
+    try:
+        result = _send_command("sync")
+        key_count = result.get("key_count", 0)
+        click.echo(f"Sync complete. {key_count} key(s) loaded.")
+    except ControlError as e:
+        if "locked" in str(e).lower():
+            click.echo("Error: agent is locked. Run 'bwssh unlock' first.", err=True)
+        else:
+            click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1) from None
+    except OSError as e:
+        _handle_control_error(e)
 
 
 @main.command()

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from bwssh.config import BwsshConfig, load_config
 from bwssh.keys import KeyRegistry
+from bwssh.peercred import ConnectionContext, build_connection_context
+from bwssh.polkit import ACTION_UNLOCK, Authorizer, MockPolkitAuthorizer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,6 +29,7 @@ _PARSE_ERROR = -32700
 _INVALID_REQUEST = -32600
 _METHOD_NOT_FOUND = -32601
 _INTERNAL_ERROR = -32603
+_UNAUTHORIZED = -32001
 
 
 class ControlError(Exception):
@@ -45,6 +48,7 @@ class ControlServer:
         bitwarden: BitwardenLike | None = None,
         polkit_available: bool = True,
         polkit_error: str | None = None,
+        polkit: Authorizer | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir
         self._socket_path = runtime_dir / _CONTROL_SOCKET_NAME
@@ -54,6 +58,7 @@ class ControlServer:
         self._bitwarden = bitwarden
         self._polkit_available = polkit_available
         self._polkit_error = polkit_error
+        self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
 
         if agent_server is not None:
             self._registry: KeyRegistry = agent_server.registry
@@ -64,7 +69,7 @@ class ControlServer:
 
         self._config = config or BwsshConfig()
         self._start_time = time.monotonic()
-        self._locked = False
+        self._locked = True  # Start locked until unlock is called
         self._methods: dict[str, Any] = {
             "status": self._handle_status,
             "list_keys": self._handle_list_keys,
@@ -73,10 +78,16 @@ class ControlServer:
             "sync": self._handle_sync,
             "reload_config": self._handle_reload_config,
         }
+        # Connection context for current request (set by handle_client)
+        self._current_conn_ctx: ConnectionContext | None = None
 
     @property
     def socket_path(self) -> Path:
         return self._socket_path
+
+    @property
+    def is_locked(self) -> bool:
+        return self._locked
 
     def _prepare_runtime_dir(self) -> None:
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -91,18 +102,35 @@ class ControlServer:
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        # Get connection context from socket for polkit authorization
+        sock = writer.get_extra_info("socket")
+        conn_ctx = None
+        if sock is not None:
+            try:
+                conn_ctx = build_connection_context(sock)
+                logger.debug(
+                    "Control client connected: pid=%d, uid=%d",
+                    conn_ctx.peer_pid,
+                    conn_ctx.peer_uid,
+                )
+            except OSError:
+                logger.warning("Failed to get peer credentials for control client")
+
         try:
             while True:
                 line = await reader.readline()
                 if not line:
                     break
 
+                # Set connection context for handler methods
+                self._current_conn_ctx = conn_ctx
                 response = await self._process_line(line)
                 writer.write(json.dumps(response).encode() + b"\n")
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
+            self._current_conn_ctx = None
             writer.close()
             await writer.wait_closed()
 
@@ -184,12 +212,24 @@ class ControlServer:
         return {"locked": True}
 
     async def _handle_unlock(self, params: dict[str, Any]) -> dict[str, Any]:
+        # Check polkit authorization for unlock action
+        if self._current_conn_ctx is not None and self._config.auth.require_polkit:
+            authorized = await self._polkit.check_authorization(
+                ACTION_UNLOCK, self._current_conn_ctx, {}
+            )
+            if not authorized:
+                logger.warning(
+                    "Unlock denied by polkit: pid=%d",
+                    self._current_conn_ctx.peer_pid,
+                )
+                raise ControlError(_UNAUTHORIZED, "Unlock denied by polkit")
+
         session_key = params.get("session_key")
-        if (
-            self._bitwarden is not None
-            and session_key
-            and self._agent_server is not None
-        ):
+        if not session_key:
+            raise ControlError(_INVALID_REQUEST, "Missing session_key parameter")
+
+        if self._bitwarden is not None and self._agent_server is not None:
+            # Store session key and load keys from Bitwarden
             self._bitwarden.unlock(session_key)
             identities = await self._bitwarden.list_identities(session_key)
             for identity in identities:
@@ -198,12 +238,18 @@ class ControlServer:
                 )
                 self._agent_server.load_key_from_bytes(key_data, identity)
             self._locked = False
+            logger.info("Agent unlocked with %d keys", len(identities))
             return {"unlocked": True, "key_count": len(identities)}
+
         self._locked = False
         return {"unlocked": True}
 
     async def _handle_sync(self, params: dict[str, Any]) -> dict[str, Any]:
+        # Use provided session_key or fall back to stored session
         session_key = params.get("session_key")
+        if not session_key and self._bitwarden is not None:
+            session_key = self._bitwarden.session_key
+
         if (
             self._bitwarden is not None
             and session_key
@@ -216,7 +262,12 @@ class ControlServer:
                     identity.identity_id, session_key
                 )
                 self._agent_server.load_key_from_bytes(key_data, identity)
+            logger.info("Synced %d keys from Bitwarden", len(identities))
             return {"synced": True, "key_count": len(identities)}
+
+        if self._locked:
+            msg = "Agent is locked. Run 'bwssh unlock' first."
+            raise ControlError(_UNAUTHORIZED, msg)
         return {"synced": True}
 
     async def _handle_reload_config(self, _params: dict[str, Any]) -> dict[str, Any]:

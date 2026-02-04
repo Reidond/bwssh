@@ -177,7 +177,7 @@ class AgentServer:
 
         private_key = self._registry.get_private_key(key_blob)
         if private_key is None:
-            logger.warning("Sign request for unknown key")
+            logger.warning("Sign request for unknown key (agent may be locked)")
             await write_message(writer, SSH_AGENT_FAILURE, b"")
             return
 
@@ -389,6 +389,7 @@ def main_entry() -> None:
         config=config,
         polkit_available=polkit_available,
         polkit_error=polkit_error,
+        polkit=caching_auth,
     )
 
     def _shutdown_handler() -> None:

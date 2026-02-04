@@ -79,7 +79,7 @@ class PolkitAuthorizer:
         self,
         action_id: str,
         connection_ctx: ConnectionContext,
-        details: dict[str, str],
+        details: dict[str, str],  # noqa: ARG002
     ) -> bool:
         try:
             introspection = await self._bus.introspect(

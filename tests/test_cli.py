@@ -188,29 +188,41 @@ class TestInstallCommand:
 
 class TestUnlockCommand:
     def test_unlock_success(self, runner: CliRunner) -> None:
-        with (
-            patch("bwssh.cli._run_bw_unlock", return_value="fake-session-key"),
-            patch("bwssh.cli._send_command", return_value={"unlocked": True}),
+        """Unlock sends request to daemon (daemon handles interactive prompt)."""
+        with patch(
+            "bwssh.cli._send_command", return_value={"unlocked": True, "key_count": 1}
         ):
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code == 0
         assert "unlocked" in result.output.lower()
+        assert "1 key(s)" in result.output
 
-    def test_unlock_bw_fails(self, runner: CliRunner) -> None:
-        with patch("bwssh.cli._run_bw_unlock", return_value=None):
-            result = runner.invoke(main, ["unlock"])
-        assert result.exit_code != 0
+    def test_unlock_with_session_option(self, runner: CliRunner) -> None:
+        """Unlock with --session uses legacy mode."""
+        with patch(
+            "bwssh.cli._send_command", return_value={"unlocked": True, "key_count": 2}
+        ) as mock_send:
+            result = runner.invoke(main, ["unlock", "--session", "my-secret-key"])
+        assert result.exit_code == 0
+        mock_send.assert_called_once_with("unlock", {"session_key": "my-secret-key"})
 
     def test_unlock_daemon_not_running(self, runner: CliRunner) -> None:
-        with (
-            patch("bwssh.cli._run_bw_unlock", return_value="fake-key"),
-            patch(
-                "bwssh.cli._send_command",
-                side_effect=ControlError(-1, "Connection refused"),
-            ),
+        with patch(
+            "bwssh.cli._send_command",
+            side_effect=OSError("Connection refused"),
         ):
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code != 0
+
+    def test_unlock_denied_by_polkit(self, runner: CliRunner) -> None:
+        """Unlock denied by polkit shows appropriate error."""
+        with patch(
+            "bwssh.cli._send_command",
+            side_effect=ControlError(-32001, "Unlock denied by polkit"),
+        ):
+            result = runner.invoke(main, ["unlock"])
+        assert result.exit_code != 0
+        assert "polkit" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

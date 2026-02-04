@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from bwssh.agent_proto import read_message, write_message
+from bwssh.bitwarden import MockBitwardenProvider
 from bwssh.config import BwsshConfig, DaemonConfig
 from bwssh.constants import (
     SSH_AGENT_IDENTITIES_ANSWER,
@@ -203,7 +204,8 @@ class TestStatusMethod:
             result = resp["result"]
             assert isinstance(result, dict)
             assert result["key_count"] == 0
-            assert result["locked"] is False
+            # Server starts locked by default
+            assert result["locked"] is True
         finally:
             control_server.shutdown()
             await task
@@ -324,9 +326,10 @@ class TestUnlockMethod:
 
 class TestSyncMethod:
     @pytest.mark.asyncio
-    async def test_sync_stub(
+    async def test_sync_when_locked_returns_error(
         self, control_server: ControlServer, control_socket_path: Path
     ) -> None:
+        """Sync returns error when agent is locked."""
         task = await _start_control(control_server)
         try:
             resp = await _send_raw(
@@ -334,12 +337,54 @@ class TestSyncMethod:
                 {"method": "sync", "id": 1, "params": {}},
             )
             assert resp["id"] == 1
-            assert "result" in resp
-            result = resp["result"]
-            assert isinstance(result, dict)
-            assert result["synced"] is True
+            # Server is locked by default, so sync should fail
+            assert "error" in resp
+            error = resp["error"]
+            assert isinstance(error, dict)
+            assert "locked" in str(error["message"]).lower()
         finally:
             control_server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_sync_after_unlock(
+        self,
+        runtime_dir: Path,
+        control_socket_path: Path,
+        config: BwsshConfig,
+    ) -> None:
+        """Sync works after unlock with session key."""
+        bw = MockBitwardenProvider()
+        agent = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+        task = await _start_control(server)
+        try:
+            # First unlock with session key
+            resp1 = await _send_raw(
+                control_socket_path,
+                {"method": "unlock", "id": 1, "params": {"session_key": "test"}},
+            )
+            assert "result" in resp1
+            result1 = resp1["result"]
+            assert isinstance(result1, dict)
+            assert result1["unlocked"] is True
+
+            # Now sync should work
+            resp2 = await _send_raw(
+                control_socket_path,
+                {"method": "sync", "id": 2, "params": {}},
+            )
+            assert "result" in resp2
+            result2 = resp2["result"]
+            assert isinstance(result2, dict)
+            assert result2["synced"] is True
+        finally:
+            server.shutdown()
             await task
 
 

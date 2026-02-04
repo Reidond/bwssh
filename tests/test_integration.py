@@ -166,12 +166,12 @@ class TestFullDaemonLifecycle:
         assert keys == []
 
         # ---------------------------------------------------------------
-        # 3. Status via control socket: running, 0 keys, not locked
+        # 3. Status via control socket: running, 0 keys, locked by default
         # ---------------------------------------------------------------
         status = await _control_command(control_sock, "status")
         assert status["pid"] == os.getpid()
         assert status["key_count"] == 0
-        assert status["locked"] is False
+        assert status["locked"] is True  # Server starts locked
         assert isinstance(status["uptime"], float)
         assert status["uptime"] >= 0.0
 
