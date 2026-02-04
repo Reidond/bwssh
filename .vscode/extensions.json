@@ -4,6 +4,7 @@
     "ms-python.python",
     "ms-python.mypy-type-checker",
     "tamasfe.even-better-toml",
-    "editorconfig.editorconfig"
+    "editorconfig.editorconfig",
+    "oxc.oxc-vscode"
   ]
 }

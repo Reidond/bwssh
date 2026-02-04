@@ -37,5 +37,44 @@
     "**/__pycache__/**": true
   },
   "files.trimTrailingWhitespace": true,
-  "files.insertFinalNewline": true
+  "files.insertFinalNewline": true,
+  "biome.enabled": false,
+
+  // OXC Extension Settings (for docs/ folder)
+  "oxc.enable": true,
+  "oxc.lint.enable": true,
+  "oxc.lint.run": "onType",
+  "oxc.lint.configPath": "docs/oxlint.json",
+  "oxc.format.enable": true,
+  "oxc.format.configPath": "docs/oxfmt.json",
+
+  // TypeScript/JavaScript formatting with oxfmt in docs folder
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[vue]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[json]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  }
 }

@@ -1,0 +1,6 @@
+- title: CLI entry points
+  path: /api/cli
+- title: Daemon and control
+  path: /api/daemon
+- title: Configuration and keys
+  path: /api/configuration

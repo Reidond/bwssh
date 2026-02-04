@@ -1,0 +1,109 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "warn",
+    "perf": "warn",
+    "style": "warn",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "plugins": ["typescript", "unicorn", "import"],
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+  "globals": {
+    "defineNuxtConfig": "readonly",
+    "useAppConfig": "readonly",
+    "useRuntimeConfig": "readonly",
+    "definePageMeta": "readonly",
+    "navigateTo": "readonly",
+    "useFetch": "readonly",
+    "useAsyncData": "readonly",
+    "useLazyFetch": "readonly",
+    "useLazyAsyncData": "readonly",
+    "useHead": "readonly",
+    "useSeoMeta": "readonly",
+    "useRoute": "readonly",
+    "useRouter": "readonly",
+    "useState": "readonly",
+    "useCookie": "readonly",
+    "useNuxtApp": "readonly",
+    "useError": "readonly",
+    "clearError": "readonly",
+    "createError": "readonly",
+    "showError": "readonly",
+    "defineNuxtComponent": "readonly",
+    "defineNuxtPlugin": "readonly",
+    "defineNuxtRouteMiddleware": "readonly",
+    "defineEventHandler": "readonly",
+    "defineNitroConfig": "readonly",
+    "ref": "readonly",
+    "reactive": "readonly",
+    "computed": "readonly",
+    "watch": "readonly",
+    "watchEffect": "readonly",
+    "onMounted": "readonly",
+    "onUnmounted": "readonly",
+    "onBeforeMount": "readonly",
+    "onBeforeUnmount": "readonly",
+    "nextTick": "readonly",
+    "toRef": "readonly",
+    "toRefs": "readonly",
+    "unref": "readonly",
+    "isRef": "readonly",
+    "shallowRef": "readonly",
+    "triggerRef": "readonly",
+    "provide": "readonly",
+    "inject": "readonly"
+  },
+  "rules": {
+    "no-console": "warn",
+    "no-debugger": "error",
+    "no-unused-vars": "off",
+    "typescript/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-explicit-any": "warn",
+    "typescript/consistent-type-imports": "warn",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/no-array-for-each": "warn",
+    "unicorn/prefer-string-replace-all": "warn",
+    "unicorn/prefer-array-find": "warn",
+    "unicorn/prefer-includes": "warn",
+    "unicorn/prefer-number-properties": "warn",
+    "import/no-duplicates": "error",
+    "import/first": "warn",
+    "import/newline-after-import": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["*.config.ts", "*.config.js"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["*.vue"],
+      "rules": {
+        "typescript/no-unused-vars": "off"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "node_modules",
+    ".nuxt",
+    ".output",
+    "dist",
+    "*.min.js",
+    "*.d.ts"
+  ]
+}

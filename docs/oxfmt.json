@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasrice/json-schema-store/oxfmt/schemas/json/oxfmt.json",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": false,
+  "singleQuote": true,
+  "quoteProps": "as-needed",
+  "jsxSingleQuote": false,
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "bracketSameLine": false,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "experimentalSortImports": {
+    "groups": [
+      ["builtin", "external"],
+      ["internal"],
+      ["parent", "sibling", "index"],
+      ["type"],
+      ["side-effect", "side-effect-style"],
+      ["style"]
+    ],
+    "newlinesBetween": "always"
+  }
+}

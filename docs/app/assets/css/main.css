@@ -1,0 +1,119 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme static {
+  --font-sans: "Space Grotesk", "Segoe UI", sans-serif;
+  --font-display: "Fraunces", "Georgia", serif;
+  --ui-container: 86rem;
+
+  --color-primary-50: oklch(0.98 0.03 165);
+  --color-primary-200: oklch(0.9 0.06 165);
+  --color-primary-500: oklch(0.62 0.16 165);
+  --color-primary-700: oklch(0.48 0.14 165);
+  --color-primary-900: oklch(0.32 0.1 165);
+}
+
+:root {
+  --page-bg-base: oklch(0.99 0.01 165);
+  --page-bg-soft: oklch(0.98 0.02 165);
+  --page-bg-spot-1: oklch(0.96 0.05 165 / 0.85);
+  --page-bg-spot-2: oklch(0.97 0.04 95 / 0.7);
+}
+
+.dark {
+  --page-bg-base: oklch(0.16 0.02 200);
+  --page-bg-soft: oklch(0.2 0.02 200);
+  --page-bg-spot-1: oklch(0.35 0.08 165 / 0.35);
+  --page-bg-spot-2: oklch(0.28 0.06 95 / 0.3);
+}
+
+@layer base {
+  body {
+    background:
+      radial-gradient(900px 520px at 10% -10%, var(--page-bg-spot-1), transparent 60%),
+      radial-gradient(720px 420px at 90% -20%, var(--page-bg-spot-2), transparent 55%),
+      linear-gradient(180deg, var(--page-bg-base), var(--page-bg-soft));
+    background-attachment: fixed;
+    color-scheme: light;
+  }
+
+  .dark body {
+    color-scheme: dark;
+  }
+
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  ::selection {
+    background: oklch(0.8 0.16 165 / 0.45);
+  }
+}
+
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer utilities {
+  .hero-animate {
+    animation: hero-in 0.8s ease-out both;
+  }
+
+  .hero-links {
+    margin-top: 1.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem 1.75rem;
+    font-size: 0.98rem;
+  }
+
+  .hero-link {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--color-primary-700);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in oklch, var(--color-primary-700) 45%, transparent);
+    padding-bottom: 0.2rem;
+    transition: color 150ms ease, border-color 150ms ease;
+  }
+
+  .hero-link-arrow {
+    margin-left: 0.4rem;
+    display: inline-block;
+    transition: transform 150ms ease;
+  }
+
+  .hero-link:hover {
+    color: var(--color-primary-500);
+    border-color: color-mix(in oklch, var(--color-primary-500) 70%, transparent);
+  }
+
+  .hero-link:hover .hero-link-arrow {
+    transform: translateX(3px);
+  }
+
+  .dark .hero-link {
+    color: var(--color-primary-200);
+    border-bottom-color: color-mix(in oklch, var(--color-primary-200) 55%, transparent);
+  }
+
+  .dark .hero-link:hover {
+    color: var(--color-primary-50);
+    border-bottom-color: color-mix(in oklch, var(--color-primary-50) 70%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-animate {
+    animation: none;
+  }
+}
