@@ -12,6 +12,9 @@ import struct
 import sys
 from pathlib import Path
 
+from dbus_fast import BusType
+from dbus_fast.aio import MessageBus
+
 from bwssh.agent_proto import (
     pack_string,
     pack_uint32,
@@ -45,6 +48,7 @@ from bwssh.polkit import (
     Authorizer,
     CachingAuthorizer,
     MockPolkitAuthorizer,
+    PolkitAuthorizer,
     build_details,
 )
 from bwssh.signing import build_signature_blob, sign_data
@@ -289,8 +293,22 @@ def main_entry() -> None:
     pid_file.write_text(str(os.getpid()))
     logger.info("PID file written: %s (pid=%d)", pid_file, os.getpid())
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     bw_provider = BitwardenProvider(config.bitwarden.bw_path, config.bitwarden.item_ids)
-    polkit_auth = MockPolkitAuthorizer(always_allow=True)
+    polkit_auth: Authorizer
+    try:
+        bus = MessageBus(bus_type=BusType.SYSTEM)
+        loop.run_until_complete(bus.connect())
+        polkit_auth = PolkitAuthorizer(bus)
+    except Exception:
+        logger.warning(
+            "Failed to connect to system D-Bus for polkit; allowing all sign requests",
+            exc_info=True,
+        )
+        polkit_auth = MockPolkitAuthorizer(always_allow=True)
+
     caching_auth = CachingAuthorizer(
         polkit_auth, config.auth.approval_mode, config.auth.approval_ttl_seconds
     )
@@ -307,9 +325,6 @@ def main_entry() -> None:
         bitwarden=bw_provider,
         config=config,
     )
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     def _shutdown_handler() -> None:
         logger.info("Received shutdown signal, stopping daemon")
