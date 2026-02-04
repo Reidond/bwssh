@@ -24,6 +24,16 @@ integrates with systemd user services.
 uv sync
 ```
 
+## Bitwarden CLI
+
+Install the Bitwarden CLI (`bw`) and log in before using bwssh. See
+https://bitwarden.com/help/cli/ for installation instructions.
+
+```bash
+bw --version
+bw login
+```
+
 ## Quick start
 
 ```bash
