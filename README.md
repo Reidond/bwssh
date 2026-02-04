@@ -6,17 +6,17 @@ integrates with systemd user services.
 
 ## Features
 
-- Bitwarden CLI integration for SSH key material
-- OpenSSH-compatible agent socket at `${XDG_RUNTIME_DIR}/bwssh/agent.sock`
-- polkit authorization with process metadata
-- Approval caching modes: `always`, `per_connection`, `ttl`
-- Forwarded agent guardrails via `deny_forwarded_by_default`
+-   Bitwarden CLI integration for SSH key material
+-   OpenSSH-compatible agent socket at `${XDG_RUNTIME_DIR}/bwssh/agent.sock`
+-   polkit authorization with process metadata
+-   Approval caching modes: `always`, `per_connection`, `ttl`
+-   Forwarded agent guardrails via `deny_forwarded_by_default`
 
 ## Requirements
 
-- Linux with systemd user services
-- Python 3.12+
-- Bitwarden CLI (`bw`) installed and logged in
+-   Linux with systemd user services
+-   Python 3.12+
+-   Bitwarden CLI (`bw`) installed and logged in
 
 ## Installation
 
@@ -72,8 +72,8 @@ prefer_rsa_sha2 = true
 
 Environment overrides:
 
-- `BWSSH_RUNTIME_DIR`
-- `BWSSH_LOG_LEVEL`
+-   `BWSSH_RUNTIME_DIR`
+-   `BWSSH_LOG_LEVEL`
 
 ## CLI commands
 
@@ -95,8 +95,8 @@ Full documentation lives in `docs/` and can be served locally:
 
 ```bash
 cd docs
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 ## Development
