@@ -303,6 +303,114 @@ class TestLockMethod:
             await task
 
 
+class TestPublicLockMethod:
+    """Tests for ControlServer.lock() — the synchronous public method."""
+
+    @pytest.mark.asyncio
+    async def test_lock_sets_locked_flag(
+        self,
+        runtime_dir: Path,
+        config: BwsshConfig,
+    ) -> None:
+        """Calling lock() must flip _locked to True."""
+        bw = MockBitwardenProvider()
+        agent = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+        # Simulate an unlocked state
+        server._locked = False
+        server.lock()
+        assert server.is_locked is True
+
+    @pytest.mark.asyncio
+    async def test_lock_clears_registry_and_bitwarden(
+        self,
+        runtime_dir: Path,
+        config: BwsshConfig,
+        ed25519_key_path: Path,
+    ) -> None:
+        """lock() must clear keys and bitwarden session."""
+        bw = MockBitwardenProvider()
+        bw.unlock("test-session")
+        agent = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        agent.load_key(ed25519_key_path, "test-key", "test")
+        assert len(agent.registry.list_identities()) == 1
+        assert bw.is_unlocked
+
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+        server._locked = False
+        server.lock()
+
+        assert server.is_locked is True
+        assert len(agent.registry.list_identities()) == 0
+        assert not bw.is_unlocked
+
+    @pytest.mark.asyncio
+    async def test_lock_status_reflects_locked_after_direct_call(
+        self,
+        runtime_dir: Path,
+        control_socket_path: Path,
+        config: BwsshConfig,
+    ) -> None:
+        """Status must report locked after ControlServer.lock() is called directly.
+
+        This is the regression scenario: sleep watcher (or external code)
+        calls lock() directly and status must stay in sync.
+        """
+        bw = MockBitwardenProvider()
+        agent = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+        task = await _start_control(server)
+        try:
+            # Unlock first
+            resp = await _send_raw(
+                control_socket_path,
+                {"method": "unlock", "id": 1, "params": {"session_key": "s"}},
+            )
+            result = resp["result"]
+            assert isinstance(result, dict)
+            assert result["unlocked"] is True
+
+            # Verify status shows unlocked
+            resp2 = await _send_raw(
+                control_socket_path,
+                {"method": "status", "id": 2, "params": {}},
+            )
+            result2 = resp2["result"]
+            assert isinstance(result2, dict)
+            assert result2["locked"] is False
+
+            # Simulate sleep watcher calling lock() directly
+            server.lock()
+
+            # Status must now show locked
+            resp3 = await _send_raw(
+                control_socket_path,
+                {"method": "status", "id": 3, "params": {}},
+            )
+            result3 = resp3["result"]
+            assert isinstance(result3, dict)
+            assert result3["locked"] is True
+            assert result3["key_count"] == 0
+        finally:
+            server.shutdown()
+            await task
+
+
 class TestUnlockMethod:
     @pytest.mark.asyncio
     async def test_unlock_stub(

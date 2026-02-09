@@ -246,7 +246,7 @@ class AgentServer:
 
 
 async def _sleep_watcher(
-    agent_server: AgentServer, shutdown_event: asyncio.Event
+    control_server: ControlServer, shutdown_event: asyncio.Event
 ) -> None:
     """Watch for system sleep events and lock the agent."""
     try:
@@ -266,7 +266,7 @@ async def _sleep_watcher(
         def on_prepare_for_sleep(going_to_sleep: bool) -> None:
             if going_to_sleep:
                 logger.info("System going to sleep, locking agent")
-                agent_server.lock()
+                control_server.lock()
 
         manager.on_prepare_for_sleep(on_prepare_for_sleep)  # type: ignore[attr-defined]
         logger.info("Sleep watcher active: will lock on system sleep")
@@ -296,7 +296,9 @@ async def _main_async(
         asyncio.create_task(control_server.serve()),
     ]
     if lock_on_sleep:
-        tasks.append(asyncio.create_task(_sleep_watcher(agent_server, shutdown_event)))
+        tasks.append(
+            asyncio.create_task(_sleep_watcher(control_server, shutdown_event))
+        )
 
     await asyncio.gather(*tasks)
 

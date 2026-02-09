@@ -937,6 +937,104 @@ class TestDaemonIntegration:
             control.shutdown()
             await task
 
+    @staticmethod
+    async def _ctrl_cmd(
+        socket_path: str,
+        method: str,
+        req_id: int,
+        params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Send a JSON-lines command to the control socket and return result."""
+        reader, writer = await asyncio.open_unix_connection(socket_path)
+        payload = (
+            json.dumps(
+                {"method": method, "id": req_id, "params": params or {}}
+            ).encode()
+            + b"\n"
+        )
+        writer.write(payload)
+        await writer.drain()
+        line = await reader.readline()
+        writer.close()
+        await writer.wait_closed()
+        resp: dict[str, object] = json.loads(line.decode())
+        return resp
+
+    @pytest.mark.asyncio
+    async def test_sleep_lock_updates_status(self, tmp_path: Path) -> None:
+        """Regression: sleep/session-lock must set status to locked.
+
+        Before the fix, the sleep watcher called ``AgentServer.lock()``
+        which cleared keys but never set ``ControlServer._locked``.
+        ``bwssh status`` would still report 'unlocked' with 0 keys.
+        """
+        runtime_dir = tmp_path / "sleep-lock-status"
+        config = BwsshConfig(daemon=DaemonConfig(runtime_dir=runtime_dir))
+        bw = MockBitwardenProvider()
+        polkit = MockPolkitAuthorizer(always_allow=True)
+
+        agent = AgentServer(
+            runtime_dir=runtime_dir,
+            polkit=polkit,
+            config=config,
+            bitwarden=bw,
+        )
+        control = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+
+        task = asyncio.create_task(_main_async(agent, control))
+        await asyncio.sleep(0.1)
+        ctrl_sock = str(control.socket_path)
+
+        try:
+            # 1. Unlock the agent (load keys from Bitwarden)
+            resp = await self._ctrl_cmd(
+                ctrl_sock,
+                "unlock",
+                1,
+                {"session_key": "test-session"},
+            )
+            assert resp["result"]["unlocked"] is True  # type: ignore[index]
+            assert resp["result"]["key_count"] == 1  # type: ignore[index]
+
+            # 2. Verify status shows unlocked with keys
+            resp2 = await self._ctrl_cmd(ctrl_sock, "status", 2)
+            assert resp2["result"]["locked"] is False  # type: ignore[index]
+            assert resp2["result"]["key_count"] == 1  # type: ignore[index]
+
+            # 3. Simulate the sleep/session-lock watcher firing.
+            #    This is what _sleep_watcher.on_prepare_for_sleep() does.
+            control.lock()
+
+            # 4. Status MUST now report locked with 0 keys
+            resp3 = await self._ctrl_cmd(ctrl_sock, "status", 3)
+            assert resp3["result"]["locked"] is True, (  # type: ignore[index]
+                "Status must show locked after sleep watcher fires"
+            )
+            assert resp3["result"]["key_count"] == 0, (  # type: ignore[index]
+                "Keys must be cleared after sleep watcher fires"
+            )
+
+            # 5. Agent socket must also report 0 identities
+            agent_r, agent_w = await asyncio.open_unix_connection(
+                str(agent.socket_path)
+            )
+            await write_message(agent_w, constants.SSH_AGENTC_REQUEST_IDENTITIES, b"")
+            msg_type, payload = await read_message(agent_r)
+            assert msg_type == constants.SSH_AGENT_IDENTITIES_ANSWER
+            nkeys, _ = unpack_uint32(payload, 0)
+            assert nkeys == 0
+            agent_w.close()
+            await agent_w.wait_closed()
+        finally:
+            agent.shutdown()
+            control.shutdown()
+            await task
+
     @pytest.mark.asyncio
     async def test_shutdown_clears_keys(
         self, tmp_path: Path, ed25519_key_path: Path

@@ -89,6 +89,21 @@ class ControlServer:
     def is_locked(self) -> bool:
         return self._locked
 
+    def lock(self) -> None:
+        """Lock the agent: clear keys, bitwarden state, and set locked flag.
+
+        This is the single source of truth for locking.  Call this instead
+        of ``AgentServer.lock()`` so the ``_locked`` flag stays in sync.
+        """
+        if self._agent_server is not None:
+            self._agent_server.lock()
+        else:
+            self._registry.clear()
+        if self._bitwarden is not None:
+            self._bitwarden.lock()
+        self._locked = True
+        logger.info("Agent locked")
+
     def _prepare_runtime_dir(self) -> None:
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         self._runtime_dir.chmod(0o700)
@@ -202,13 +217,7 @@ class ControlServer:
         return {"keys": keys}
 
     async def _handle_lock(self, _params: dict[str, Any]) -> dict[str, Any]:
-        if self._agent_server is not None:
-            self._agent_server.lock()
-        else:
-            self._registry.clear()
-        if self._bitwarden is not None:
-            self._bitwarden.lock()
-        self._locked = True
+        self.lock()
         return {"locked": True}
 
     async def _handle_unlock(self, params: dict[str, Any]) -> dict[str, Any]:
