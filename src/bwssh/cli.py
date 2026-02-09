@@ -11,9 +11,12 @@ import subprocess
 import time
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
+
+if TYPE_CHECKING:
+    from bwssh.ui._base import UnlockResult
 
 from bwssh import __version__
 from bwssh.config import _default_config_path, load_config
@@ -125,17 +128,24 @@ def _get_bw_session_from_env() -> str | None:
     return os.environ.get("BW_SESSION") or None
 
 
-def _run_bw_unlock_interactive() -> str | None:
-    """Run interactive unlock UI and return the session key.
+def _run_unlock_ui() -> UnlockResult:
+    """Run interactive unlock UI and return the full result.
 
     Launches the TUI (or future graphical) unlock screen, which
-    collects the master password and runs ``bw unlock --raw``
-    internally.  Returns ``None`` if the user cancels or unlock fails.
+    collects the master password, runs ``bw unlock --raw``, and sends
+    the session to the daemon to load keys — all while showing a
+    loading indicator.
     """
     from bwssh.ui import create_unlock_ui  # noqa: PLC0415
 
     bw_path = shutil.which("bw") or "bw"
-    return create_unlock_ui(bw_path).run().session_key
+    socket_path = _get_control_socket()
+
+    async def _send_session(session_key: str) -> dict[str, Any]:
+        client = ControlClient(socket_path)
+        return await client.send_command("unlock", {"session_key": session_key})
+
+    return create_unlock_ui(bw_path, on_session_ready=_send_session).run()
 
 
 def _handle_control_error(_e: ControlError | OSError) -> None:
@@ -283,14 +293,17 @@ def unlock(session_key: str | None) -> None:
     if session_key is None:
         session_key = _get_bw_session_from_env()
 
-    # If still no session, run interactive unlock
+    # If still no session, run interactive unlock (TUI handles everything)
     if session_key is None:
-        session_key = _run_bw_unlock_interactive()
-        if session_key is None:
-            click.echo("Error: failed to unlock Bitwarden vault.", err=True)
+        ui_result = _run_unlock_ui()
+        if ui_result.session_key is None:
+            if ui_result.error and ui_result.error != "cancelled":
+                click.echo(f"Error: {ui_result.error}", err=True)
             raise SystemExit(1)
+        click.echo(f"Vault unlocked. {ui_result.key_count} key(s) loaded.")
+        return
 
-    # Send session key to daemon over secure Unix socket
+    # Direct session key provided — send to daemon without TUI
     try:
         result = _send_command("unlock", {"session_key": session_key})
         key_count = result.get("key_count", 0)

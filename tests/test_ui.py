@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -17,16 +18,19 @@ class TestUnlockResult:
     def test_default_values(self) -> None:
         result = UnlockResult()
         assert result.session_key is None
+        assert result.key_count == 0
         assert result.error is None
 
     def test_success_result(self) -> None:
-        result = UnlockResult(session_key="abc123")
+        result = UnlockResult(session_key="abc123", key_count=3)
         assert result.session_key == "abc123"
+        assert result.key_count == 3
         assert result.error is None
 
     def test_error_result(self) -> None:
         result = UnlockResult(error="cancelled")
         assert result.session_key is None
+        assert result.key_count == 0
         assert result.error == "cancelled"
 
 
@@ -97,6 +101,15 @@ class TestCreateUnlockUi:
             ui = create_unlock_ui(bw_path="/custom/bw")
         assert isinstance(ui, TuiUnlockUI)
         assert ui._bw_path == "/custom/bw"
+
+    def test_passes_on_session_ready(self) -> None:
+        async def hook(_key: str) -> dict[str, Any]:
+            return {"key_count": 1}
+
+        with patch.dict("os.environ", {}, clear=True):
+            ui = create_unlock_ui(on_session_ready=hook)
+        assert isinstance(ui, TuiUnlockUI)
+        assert ui._on_session_ready is hook
 
 
 class TestBwUnlockSubprocess:
@@ -203,3 +216,26 @@ class TestBwUnlockSubprocess:
         mock_exec.assert_called_once()
         call_args = mock_exec.call_args[0]
         assert call_args == ("bw", "unlock", "--raw")
+
+
+class TestTuiUnlockUIInit:
+    """Test TuiUnlockUI and _UnlockApp construction."""
+
+    def test_stores_on_session_ready(self) -> None:
+        async def hook(_key: str) -> dict[str, Any]:
+            return {"key_count": 2}
+
+        ui = TuiUnlockUI(bw_path="bw", on_session_ready=hook)
+        assert ui._on_session_ready is hook
+
+    def test_default_no_hook(self) -> None:
+        ui = TuiUnlockUI(bw_path="bw")
+        assert ui._on_session_ready is None
+
+    def test_app_receives_hook(self) -> None:
+        async def hook(_key: str) -> dict[str, Any]:
+            return {"key_count": 5}
+
+        app = _UnlockApp(bw_path="bw", on_session_ready=hook)
+        assert app._on_session_ready is hook
+        assert app.result == UnlockResult()

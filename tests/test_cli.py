@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from bwssh.cli import main
 from bwssh.control import ControlError
+from bwssh.ui._base import UnlockResult
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -187,8 +188,8 @@ class TestInstallCommand:
 
 
 class TestUnlockCommand:
-    def test_unlock_success(self, runner: CliRunner) -> None:
-        """Unlock sends request to daemon (daemon handles interactive prompt)."""
+    def test_unlock_via_env_session(self, runner: CliRunner) -> None:
+        """Unlock with BW_SESSION env var sends to daemon directly."""
         with (
             patch("bwssh.cli._get_bw_session_from_env", return_value="mock-session"),
             patch(
@@ -202,13 +203,47 @@ class TestUnlockCommand:
         assert "1 key(s)" in result.output
 
     def test_unlock_with_session_option(self, runner: CliRunner) -> None:
-        """Unlock with --session uses legacy mode."""
+        """Unlock with --session sends to daemon directly."""
         with patch(
             "bwssh.cli._send_command", return_value={"unlocked": True, "key_count": 2}
         ) as mock_send:
             result = runner.invoke(main, ["unlock", "--session", "my-secret-key"])
         assert result.exit_code == 0
         mock_send.assert_called_once_with("unlock", {"session_key": "my-secret-key"})
+
+    def test_unlock_via_tui_success(self, runner: CliRunner) -> None:
+        """Interactive unlock uses TUI and returns key count."""
+        mock_result = UnlockResult(session_key="tui-session", key_count=3)
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value=None),
+            patch("bwssh.cli._run_unlock_ui", return_value=mock_result),
+        ):
+            result = runner.invoke(main, ["unlock"])
+        assert result.exit_code == 0
+        assert "3 key(s)" in result.output
+
+    def test_unlock_via_tui_cancelled(self, runner: CliRunner) -> None:
+        """Cancelled TUI exits silently."""
+        mock_result = UnlockResult(error="cancelled")
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value=None),
+            patch("bwssh.cli._run_unlock_ui", return_value=mock_result),
+        ):
+            result = runner.invoke(main, ["unlock"])
+        assert result.exit_code != 0
+        # "cancelled" should not produce an error message
+        assert "error" not in result.output.lower()
+
+    def test_unlock_via_tui_error(self, runner: CliRunner) -> None:
+        """TUI error is printed to stderr."""
+        mock_result = UnlockResult(error="Connection refused")
+        with (
+            patch("bwssh.cli._get_bw_session_from_env", return_value=None),
+            patch("bwssh.cli._run_unlock_ui", return_value=mock_result),
+        ):
+            result = runner.invoke(main, ["unlock"])
+        assert result.exit_code != 0
+        assert "connection refused" in result.output.lower()
 
     def test_unlock_daemon_not_running(self, runner: CliRunner) -> None:
         with (

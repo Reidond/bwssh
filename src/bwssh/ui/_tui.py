@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Label, LoadingIndicator, Static
 
-from bwssh.ui._base import UnlockResult
+from bwssh.ui._base import PostUnlockHook, UnlockResult
 
 _BW_UNLOCK_TIMEOUT = 30.0
 
@@ -20,15 +20,32 @@ class TuiUnlockUI:
     """TUI-based unlock UI using *textual*.
 
     Call :meth:`run` to take over the terminal, prompt for the master
-    password, run ``bw unlock --raw``, and return the result.
+    password, run ``bw unlock --raw``, optionally send the session to
+    the daemon, and return the result.
+
+    Parameters:
+        bw_path: Path to the ``bw`` CLI binary.
+        on_session_ready: Async callback invoked after a successful
+            ``bw unlock``.  Receives the session key and should return
+            a dict containing at least ``"key_count"``.  When provided
+            the TUI keeps the loading indicator visible until the
+            callback completes.
     """
 
-    def __init__(self, bw_path: str = "bw") -> None:
+    def __init__(
+        self,
+        bw_path: str = "bw",
+        on_session_ready: PostUnlockHook | None = None,
+    ) -> None:
         self._bw_path = bw_path
+        self._on_session_ready = on_session_ready
 
     def run(self) -> UnlockResult:
         """Show TUI unlock screen and return the result."""
-        app = _UnlockApp(bw_path=self._bw_path)
+        app = _UnlockApp(
+            bw_path=self._bw_path,
+            on_session_ready=self._on_session_ready,
+        )
         app.run()
         return app.result
 
@@ -36,6 +53,8 @@ class TuiUnlockUI:
 # ---------------------------------------------------------------------------
 # Internal textual application
 # ---------------------------------------------------------------------------
+
+_SUCCESS_PAUSE = 1.0  # seconds to show the success message
 
 
 class _UnlockApp(App[None]):
@@ -74,6 +93,13 @@ class _UnlockApp(App[None]):
         margin-top: 1;
     }
 
+    #status-label {
+        width: 100%;
+        text-align: center;
+        display: none;
+        margin-top: 1;
+    }
+
     #spinner {
         display: none;
         margin-top: 1;
@@ -84,9 +110,14 @@ class _UnlockApp(App[None]):
         Binding("escape", "cancel", "Cancel", show=True),
     ]
 
-    def __init__(self, bw_path: str) -> None:
+    def __init__(
+        self,
+        bw_path: str,
+        on_session_ready: PostUnlockHook | None = None,
+    ) -> None:
         super().__init__()
         self._bw_path = bw_path
+        self._on_session_ready = on_session_ready
         self.result = UnlockResult()
 
     # -- layout -------------------------------------------------------------
@@ -101,6 +132,7 @@ class _UnlockApp(App[None]):
                 id="password-input",
             )
             yield Label("", id="error-label")
+            yield Label("", id="status-label")
             yield LoadingIndicator(id="spinner")
 
     def on_mount(self) -> None:
@@ -113,64 +145,96 @@ class _UnlockApp(App[None]):
         if not password:
             self._show_error("Password cannot be empty.")
             return
-        self._set_loading(loading=True)
+        self._enter_loading("Unlocking vault...")
         self._do_unlock(password)
 
     def action_cancel(self) -> None:
         self.result = UnlockResult(error="cancelled")
         self.exit()
 
-    # -- helpers ------------------------------------------------------------
+    # -- UI state helpers ---------------------------------------------------
+
+    def _enter_loading(self, status: str) -> None:
+        """Switch to the loading state: hide input, show spinner + status."""
+        self.query_one("#subtitle", Static).display = False
+        self.query_one("#password-input", Input).display = False
+        self.query_one("#error-label", Label).display = False
+        status_label = self.query_one("#status-label", Label)
+        status_label.update(status)
+        status_label.display = True
+        self.query_one("#spinner", LoadingIndicator).display = True
+
+    def _enter_input(self) -> None:
+        """Switch back to the input state: show input, hide spinner."""
+        self.query_one("#subtitle", Static).display = True
+        pw = self.query_one("#password-input", Input)
+        pw.display = True
+        pw.disabled = False
+        pw.clear()
+        pw.focus()
+        self.query_one("#status-label", Label).display = False
+        self.query_one("#spinner", LoadingIndicator).display = False
+
+    def _enter_success(self, message: str) -> None:
+        """Switch to success state: show status, hide spinner."""
+        status_label = self.query_one("#status-label", Label)
+        status_label.update(f"[bold green]✓[/bold green] {message}")
+        status_label.display = True
+        self.query_one("#spinner", LoadingIndicator).display = False
 
     def _show_error(self, message: str) -> None:
         label = self.query_one("#error-label", Label)
         label.update(message)
         label.display = True
 
-    def _hide_error(self) -> None:
-        self.query_one("#error-label", Label).display = False
-
-    def _set_loading(self, *, loading: bool) -> None:
-        self.query_one("#spinner", LoadingIndicator).display = loading
-        self.query_one("#password-input", Input).disabled = loading
-        if loading:
-            self._hide_error()
-
-    def _reset_input(self) -> None:
-        pw = self.query_one("#password-input", Input)
-        pw.clear()
-        pw.focus()
-
     # -- worker -------------------------------------------------------------
 
     @work(exclusive=True)
     async def _do_unlock(self, password: str) -> None:
-        """Run ``bw unlock --raw`` in the background."""
+        """Full unlock pipeline: bw unlock → daemon key-load → success."""
+        # Phase 1: unlock the vault
         try:
             session_key = await self._run_bw_unlock(password)
         except FileNotFoundError:
-            self._set_loading(loading=False)
+            self._enter_input()
             self._show_error(f"Bitwarden CLI not found: {self._bw_path}")
             return
         except TimeoutError:
-            self._set_loading(loading=False)
+            self._enter_input()
             self._show_error("Unlock timed out.")
-            self._reset_input()
+            return
+        except RuntimeError as exc:
+            # Wrong password or other bw failure
+            self._enter_input()
+            self._show_error(str(exc))
             return
         except OSError as exc:
-            self._set_loading(loading=False)
+            self._enter_input()
             self._show_error(str(exc))
-            self._reset_input()
             return
 
         if session_key is None:
-            # Should not happen, but guard anyway
-            self._set_loading(loading=False)
+            self._enter_input()
             self._show_error("No session key returned.")
-            self._reset_input()
             return
 
-        self.result = UnlockResult(session_key=session_key)
+        # Phase 2: send session to daemon and load keys
+        key_count = 0
+        if self._on_session_ready is not None:
+            self._enter_loading("Loading keys...")
+            try:
+                daemon_result = await self._on_session_ready(session_key)
+                key_count = daemon_result.get("key_count", 0)
+            except Exception as exc:
+                self._enter_input()
+                self._show_error(f"Failed to load keys: {exc}")
+                return
+
+        # Phase 3: show success briefly, then exit
+        self._enter_success(f"Unlocked! {key_count} key(s) loaded.")
+        await asyncio.sleep(_SUCCESS_PAUSE)
+
+        self.result = UnlockResult(session_key=session_key, key_count=key_count)
         self.exit()
 
     async def _run_bw_unlock(self, password: str) -> str | None:
