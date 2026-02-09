@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import tomllib
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-from bwssh.cli import main
+from bwssh.cli import _write_config_file, main
+from bwssh.config import load_config
 from bwssh.control import ControlError
 from bwssh.ui._base import UnlockResult
 
@@ -355,3 +357,106 @@ class TestKeysCommand:
         ):
             result = runner.invoke(main, ["keys"])
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# config init — _write_config_file
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigFile:
+    """Tests for _write_config_file using config.toml.example template."""
+
+    def test_generated_config_is_valid_toml(self, tmp_path: Path) -> None:
+        """Generated config should be parseable TOML."""
+        config_path = tmp_path / "bwssh" / "config.toml"
+        _write_config_file(config_path, "bw", [])
+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        assert "daemon" in data
+        assert "bitwarden" in data
+        assert "auth" in data
+        assert "ssh" in data
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        """Should create parent directories if they don't exist."""
+        config_path = tmp_path / "deep" / "nested" / "config.toml"
+        _write_config_file(config_path, "bw", [])
+
+        assert config_path.exists()
+
+    def test_substitutes_bw_path(self, tmp_path: Path) -> None:
+        """Custom bw_path should be written into the config."""
+        config_path = tmp_path / "config.toml"
+        _write_config_file(config_path, "/usr/local/bin/bw", [])
+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        assert data["bitwarden"]["bw_path"] == "/usr/local/bin/bw"
+
+    def test_substitutes_item_ids(self, tmp_path: Path) -> None:
+        """Discovered item_ids should be written into the config."""
+        config_path = tmp_path / "config.toml"
+        ids = ["aaa-111", "bbb-222", "ccc-333"]
+        _write_config_file(config_path, "bw", ids)
+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        assert data["bitwarden"]["item_ids"] == ids
+
+    def test_empty_item_ids(self, tmp_path: Path) -> None:
+        """Empty item_ids should produce an empty list."""
+        config_path = tmp_path / "config.toml"
+        _write_config_file(config_path, "bw", [])
+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        assert data["bitwarden"]["item_ids"] == []
+
+    def test_has_all_default_values(self, tmp_path: Path) -> None:
+        """Generated config should contain all default values from config.py."""
+        config_path = tmp_path / "config.toml"
+        _write_config_file(config_path, "bw", [])
+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        # daemon defaults
+        assert data["daemon"]["agent_socket"] == "agent.sock"
+        assert data["daemon"]["control_socket"] == "control.sock"
+        assert data["daemon"]["log_level"] == "INFO"
+        assert data["daemon"]["lock_on_sleep"] is True
+
+        # bitwarden defaults
+        assert data["bitwarden"]["mode"] == "explicit"
+
+        # auth defaults
+        assert data["auth"]["require_polkit"] is False
+        assert data["auth"]["approval_mode"] == "per_connection"
+        assert data["auth"]["approval_ttl_seconds"] == 300
+        assert data["auth"]["deny_forwarded_by_default"] is True
+
+        # ssh defaults
+        assert data["ssh"]["allow_ed25519"] is True
+        assert data["ssh"]["allow_ecdsa"] is True
+        assert data["ssh"]["allow_rsa"] is True
+        assert data["ssh"]["prefer_rsa_sha2"] is True
+
+    def test_config_roundtrips_through_load_config(self, tmp_path: Path) -> None:
+        """Generated config should load correctly via load_config."""
+        config_path = tmp_path / "config.toml"
+        ids = ["id-1", "id-2"]
+        _write_config_file(config_path, "/opt/bw", ids)
+
+        cfg = load_config(config_path)
+
+        assert cfg.bitwarden.bw_path == "/opt/bw"
+        assert cfg.bitwarden.item_ids == ids
+        assert cfg.daemon.log_level == "INFO"
+        assert cfg.auth.require_polkit is False
+        assert cfg.ssh.allow_ed25519 is True
