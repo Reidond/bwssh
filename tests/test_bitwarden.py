@@ -505,19 +505,3 @@ class TestMockBitwardenProvider:
         assert mock.session_key is None
         mock.unlock("my-session")
         assert mock.session_key == "my-session"
-
-    @pytest.mark.asyncio
-    async def test_mock_unlock_interactive(self) -> None:
-        """Mock provider unlock_interactive returns mock session key."""
-        mock = MockBitwardenProvider(mock_session_key="custom-session")
-        session_key = await mock.unlock_interactive()
-        assert session_key == "custom-session"
-        assert mock._session_key == "custom-session"
-        assert mock.is_unlocked is True
-
-    @pytest.mark.asyncio
-    async def test_mock_unlock_interactive_with_error(self) -> None:
-        """Mock provider unlock_interactive raises configured error."""
-        mock = MockBitwardenProvider(error=RuntimeError("unlock failed"))
-        with pytest.raises(RuntimeError, match="unlock failed"):
-            await mock.unlock_interactive()

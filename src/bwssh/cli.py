@@ -126,29 +126,16 @@ def _get_bw_session_from_env() -> str | None:
 
 
 def _run_bw_unlock_interactive() -> str | None:
-    """Run bw unlock interactively and return the session key.
+    """Run interactive unlock UI and return the session key.
 
-    This runs in the CLI process with access to the user's terminal,
-    so password input works correctly.
+    Launches the TUI (or future graphical) unlock screen, which
+    collects the master password and runs ``bw unlock --raw``
+    internally.  Returns ``None`` if the user cancels or unlock fails.
     """
+    from bwssh.ui import create_unlock_ui  # noqa: PLC0415
+
     bw_path = shutil.which("bw") or "bw"
-    try:
-        # Run bw unlock with inherited stdin/stderr for interactive prompt
-        # Only capture stdout to get the session key
-        result = subprocess.run(
-            [bw_path, "unlock", "--raw"],
-            stdin=None,  # Inherit stdin for password input
-            stdout=subprocess.PIPE,  # Capture session key
-            stderr=None,  # Inherit stderr for prompts
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        session_key = result.stdout.strip()
-        return session_key if session_key else None
-    except (FileNotFoundError, OSError):
-        return None
+    return create_unlock_ui(bw_path).run().session_key
 
 
 def _handle_control_error(_e: ControlError | OSError) -> None:

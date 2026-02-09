@@ -4,23 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import json
 import logging
-import os
-import pty
-import sys
-import termios
-import tty
 from pathlib import Path
 from typing import Any, Protocol
 
 from bwssh.keys import Identity, compute_fingerprint
 
 logger = logging.getLogger(__name__)
-
-# Longer timeout for interactive unlock (user needs to type password)
-_BW_UNLOCK_TIMEOUT_SECONDS = 120.0
 
 
 class BitwardenLike(Protocol):
@@ -35,10 +26,6 @@ class BitwardenLike(Protocol):
     def unlock(self, session_key: str) -> None: ...
 
     async def healthcheck(self) -> bool: ...
-
-    async def unlock_interactive(self) -> str:
-        """Run bw unlock interactively, returning session key."""
-        ...
 
     @property
     def is_unlocked(self) -> bool:
@@ -172,131 +159,6 @@ class BitwardenProvider:
         """Return the current session key, or None if locked."""
         return self._session_key
 
-    async def unlock_interactive(self) -> str:
-        """Run bw unlock interactively, returning session key.
-
-        This method allocates a PTY and forwards I/O to the user's terminal,
-        allowing them to enter their Bitwarden master password. The session
-        key is captured from stdout and returned.
-
-        Raises:
-            RuntimeError: If unlock fails or times out.
-            OSError: If terminal I/O fails.
-        """
-        logger.info("Starting interactive Bitwarden unlock")
-
-        # Create a pseudo-terminal for the bw process
-        master_fd, slave_fd = pty.openpty()
-
-        try:
-            # Start bw unlock with PTY for password input
-            proc = await asyncio.create_subprocess_exec(
-                self._bw_path,
-                "unlock",
-                "--raw",
-                stdin=slave_fd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=slave_fd,
-            )
-            os.close(slave_fd)
-            slave_fd = -1
-
-            # Forward I/O between user's terminal and bw process
-            session_key = await self._forward_pty_io(master_fd, proc)
-
-            if not session_key:
-                msg = "Bitwarden unlock failed: no session key returned"
-                raise RuntimeError(msg)
-
-            # Store the session key
-            self._session_key = session_key
-            logger.info("Bitwarden unlock successful")
-            return session_key
-
-        finally:
-            if slave_fd >= 0:
-                os.close(slave_fd)
-            os.close(master_fd)
-
-    async def _forward_pty_io(
-        self, master_fd: int, proc: asyncio.subprocess.Process
-    ) -> str:
-        """Forward I/O between user's terminal and PTY."""
-        stdin_fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(stdin_fd) if sys.stdin.isatty() else None
-
-        if old_settings is not None:
-            tty.setraw(stdin_fd)
-
-        try:
-            stdout_data = await self._run_pty_io_loop(master_fd, stdin_fd, proc)
-        finally:
-            if old_settings is not None:
-                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-            print()  # Newline after password entry
-
-        if proc.returncode != 0:
-            msg = f"bw unlock failed with exit code {proc.returncode}"
-            raise RuntimeError(msg)
-
-        return stdout_data.decode().strip()
-
-    async def _run_pty_io_loop(
-        self, master_fd: int, stdin_fd: int, proc: asyncio.subprocess.Process
-    ) -> bytes:
-        """Run the PTY I/O loop, returning captured stdout."""
-        loop = asyncio.get_event_loop()
-        stdout_data = b""
-
-        async def read_stdin() -> None:
-            while proc.returncode is None:
-                try:
-                    data = await loop.run_in_executor(
-                        None, lambda: os.read(stdin_fd, 1024)
-                    )
-                    if data:
-                        os.write(master_fd, data)
-                except OSError:
-                    break
-
-        async def read_pty() -> None:
-            while proc.returncode is None:
-                try:
-                    data = await loop.run_in_executor(
-                        None, lambda: os.read(master_fd, 1024)
-                    )
-                    if data:
-                        os.write(sys.stdout.fileno(), data)
-                        sys.stdout.flush()
-                except OSError:
-                    break
-
-        async def read_stdout() -> bytes:
-            nonlocal stdout_data
-            assert proc.stdout is not None
-            try:
-                stdout_data = await asyncio.wait_for(
-                    proc.stdout.read(), timeout=_BW_UNLOCK_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                proc.kill()
-                msg = f"bw unlock timed out after {_BW_UNLOCK_TIMEOUT_SECONDS}s"
-                raise TimeoutError(msg) from None
-            return stdout_data
-
-        stdin_task = asyncio.create_task(read_stdin())
-        pty_task = asyncio.create_task(read_pty())
-        stdout_task = asyncio.create_task(read_stdout())
-
-        await proc.wait()
-        stdin_task.cancel()
-        pty_task.cancel()
-
-        with contextlib.suppress(asyncio.CancelledError):
-            stdout_data = await stdout_task
-
-        return stdout_data
-
     async def healthcheck(self) -> bool:
         if self._session_key is None:
             return False
@@ -312,14 +174,11 @@ class BitwardenProvider:
 
 
 class MockBitwardenProvider:
-    def __init__(
-        self, error: Exception | None = None, mock_session_key: str = "mock-session"
-    ) -> None:
+    def __init__(self, error: Exception | None = None) -> None:
         self._session_key: str | None = None
         self._error = error
         self._cached_identities: list[Identity] = []
         self._private_key_cache: dict[str, bytes] = {}
-        self._mock_session_key = mock_session_key
 
     async def list_identities(self, _session_key: str) -> list[Identity]:
         if self._error is not None:
@@ -353,13 +212,6 @@ class MockBitwardenProvider:
     def session_key(self) -> str | None:
         """Return the current session key, or None if locked."""
         return self._session_key
-
-    async def unlock_interactive(self) -> str:
-        """Mock interactive unlock - returns mock session key."""
-        if self._error is not None:
-            raise self._error
-        self._session_key = self._mock_session_key
-        return self._mock_session_key
 
     async def healthcheck(self) -> bool:
         if self._error is not None:
