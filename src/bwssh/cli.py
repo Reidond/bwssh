@@ -128,13 +128,16 @@ def _get_bw_session_from_env() -> str | None:
     return os.environ.get("BW_SESSION") or None
 
 
-def _run_unlock_ui() -> UnlockResult:
+def _run_unlock_ui(ui_mode: str | None = None) -> UnlockResult:
     """Run interactive unlock UI and return the full result.
 
-    Launches the TUI (or future graphical) unlock screen, which
-    collects the master password, runs ``bw unlock --raw``, and sends
-    the session to the daemon to load keys — all while showing a
-    loading indicator.
+    Launches the TUI or graphical unlock screen, which collects the
+    master password, runs ``bw unlock --raw``, and sends the session
+    to the daemon to load keys — all while showing a loading indicator.
+
+    Parameters:
+        ui_mode: Force a specific UI mode (``"tui"`` or ``"graphical"``).
+            When *None*, auto-detection is used.
     """
     from bwssh.ui import create_unlock_ui  # noqa: PLC0415
 
@@ -143,9 +146,18 @@ def _run_unlock_ui() -> UnlockResult:
 
     async def _send_session(session_key: str) -> dict[str, Any]:
         client = ControlClient(socket_path)
-        return await client.send_command("unlock", {"session_key": session_key})
+        result = await client.send_command("unlock", {"session_key": session_key})
+        # Fetch detailed key info for the success screen
+        try:
+            keys_result = await client.send_command("list_keys", {})
+            result["keys"] = keys_result.get("keys", [])
+        except (ControlError, OSError):
+            result["keys"] = []
+        return result
 
-    return create_unlock_ui(bw_path, on_session_ready=_send_session).run()
+    return create_unlock_ui(
+        bw_path, on_session_ready=_send_session, ui_mode=ui_mode
+    ).run()
 
 
 def _handle_control_error(_e: ControlError | OSError) -> None:
@@ -283,7 +295,14 @@ def install(user_systemd: bool, polkit: bool) -> None:
     default=None,
     help="Use provided session key instead of interactive unlock",
 )
-def unlock(session_key: str | None) -> None:
+@click.option(
+    "--ui",
+    "ui_mode",
+    type=click.Choice(["tui", "graphical"], case_sensitive=False),
+    default=None,
+    help="Force a specific UI mode (default: auto-detect)",
+)
+def unlock(session_key: str | None, ui_mode: str | None) -> None:
     """Unlock Bitwarden vault and load keys.
 
     Prompts for your Bitwarden master password, then loads SSH keys
@@ -293,9 +312,9 @@ def unlock(session_key: str | None) -> None:
     if session_key is None:
         session_key = _get_bw_session_from_env()
 
-    # If still no session, run interactive unlock (TUI handles everything)
+    # If still no session, run interactive unlock
     if session_key is None:
-        ui_result = _run_unlock_ui()
+        ui_result = _run_unlock_ui(ui_mode=ui_mode)
         if ui_result.session_key is None:
             if ui_result.error and ui_result.error != "cancelled":
                 click.echo(f"Error: {ui_result.error}", err=True)

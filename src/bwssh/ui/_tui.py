@@ -27,7 +27,8 @@ class TuiUnlockUI:
         bw_path: Path to the ``bw`` CLI binary.
         on_session_ready: Async callback invoked after a successful
             ``bw unlock``.  Receives the session key and should return
-            a dict containing at least ``"key_count"``.  When provided
+            a dict containing at least ``"key_count"`` and optionally
+            ``"keys"`` with details of each loaded key.  When provided
             the TUI keeps the loading indicator visible until the
             callback completes.
     """
@@ -53,8 +54,6 @@ class TuiUnlockUI:
 # ---------------------------------------------------------------------------
 # Internal textual application
 # ---------------------------------------------------------------------------
-
-_SUCCESS_PAUSE = 1.0  # seconds to show the success message
 
 
 class _UnlockApp(App[None]):
@@ -104,10 +103,23 @@ class _UnlockApp(App[None]):
         display: none;
         margin-top: 1;
     }
+
+    #key-list {
+        display: none;
+        margin-top: 1;
+    }
+
+    #dismiss-hint {
+        display: none;
+        width: 100%;
+        text-align: center;
+        color: $text-muted;
+        margin-top: 1;
+    }
     """
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
-        Binding("escape", "cancel", "Cancel", show=True),
+        Binding("escape", "close_screen", "Close", show=True),
     ]
 
     def __init__(
@@ -118,6 +130,7 @@ class _UnlockApp(App[None]):
         super().__init__()
         self._bw_path = bw_path
         self._on_session_ready = on_session_ready
+        self._is_success = False
         self.result = UnlockResult()
 
     # -- layout -------------------------------------------------------------
@@ -134,6 +147,8 @@ class _UnlockApp(App[None]):
             yield Label("", id="error-label")
             yield Label("", id="status-label")
             yield LoadingIndicator(id="spinner")
+            yield Static("", id="key-list")
+            yield Static("Press Escape to close", id="dismiss-hint")
 
     def on_mount(self) -> None:
         self.query_one("#password-input", Input).focus()
@@ -143,13 +158,15 @@ class _UnlockApp(App[None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:  # noqa: ARG002
         password = self.query_one("#password-input", Input).value
         if not password:
-            self._show_error("Password cannot be empty.")
+            self._show_error("Password cannot be empty")
             return
-        self._enter_loading("Unlocking vault...")
+        self._enter_loading("Unlocking vault\u2026")
         self._do_unlock(password)
 
-    def action_cancel(self) -> None:
-        self.result = UnlockResult(error="cancelled")
+    def action_close_screen(self) -> None:
+        """Handle Escape — cancel during input, dismiss during success."""
+        if not self._is_success:
+            self.result = UnlockResult(error="cancelled")
         self.exit()
 
     # -- UI state helpers ---------------------------------------------------
@@ -159,6 +176,8 @@ class _UnlockApp(App[None]):
         self.query_one("#subtitle", Static).display = False
         self.query_one("#password-input", Input).display = False
         self.query_one("#error-label", Label).display = False
+        self.query_one("#key-list", Static).display = False
+        self.query_one("#dismiss-hint", Static).display = False
         status_label = self.query_one("#status-label", Label)
         status_label.update(status)
         status_label.display = True
@@ -174,13 +193,35 @@ class _UnlockApp(App[None]):
         pw.focus()
         self.query_one("#status-label", Label).display = False
         self.query_one("#spinner", LoadingIndicator).display = False
+        self.query_one("#key-list", Static).display = False
+        self.query_one("#dismiss-hint", Static).display = False
 
-    def _enter_success(self, message: str) -> None:
-        """Switch to success state: show status, hide spinner."""
+    def _enter_success(self, key_count: int, keys: list[dict[str, str]]) -> None:
+        """Switch to success state: show key list, wait for dismiss."""
         status_label = self.query_one("#status-label", Label)
-        status_label.update(f"[bold green]✓[/bold green] {message}")
+        status_label.update(
+            f"[bold green]\u2713[/bold green] Vault unlocked \u2014"
+            f" {key_count} key(s) loaded"
+        )
         status_label.display = True
         self.query_one("#spinner", LoadingIndicator).display = False
+
+        # Build key list markup
+        if keys:
+            lines: list[str] = []
+            for key in keys:
+                comment = key.get("comment", "") or "Unnamed key"
+                algorithm = key.get("algorithm", "")
+                fingerprint = key.get("fingerprint", "")
+                lines.append(f"  [bold]{comment}[/bold]")
+                details = " \u00b7 ".join(p for p in (algorithm, fingerprint) if p)
+                if details:
+                    lines.append(f"  [dim]{details}[/dim]")
+            key_list = self.query_one("#key-list", Static)
+            key_list.update("\n".join(lines))
+            key_list.display = True
+
+        self.query_one("#dismiss-hint", Static).display = True
 
     def _show_error(self, message: str) -> None:
         label = self.query_one("#error-label", Label)
@@ -191,7 +232,7 @@ class _UnlockApp(App[None]):
 
     @work(exclusive=True)
     async def _do_unlock(self, password: str) -> None:
-        """Full unlock pipeline: bw unlock → daemon key-load → success."""
+        """Full unlock pipeline: bw unlock -> daemon key-load -> success."""
         # Phase 1: unlock the vault
         try:
             session_key = await self._run_bw_unlock(password)
@@ -201,7 +242,7 @@ class _UnlockApp(App[None]):
             return
         except TimeoutError:
             self._enter_input()
-            self._show_error("Unlock timed out.")
+            self._show_error("Unlock timed out")
             return
         except RuntimeError as exc:
             # Wrong password or other bw failure
@@ -215,27 +256,29 @@ class _UnlockApp(App[None]):
 
         if session_key is None:
             self._enter_input()
-            self._show_error("No session key returned.")
+            self._show_error("No session key returned")
             return
 
         # Phase 2: send session to daemon and load keys
         key_count = 0
+        keys: list[dict[str, str]] = []
         if self._on_session_ready is not None:
-            self._enter_loading("Loading keys...")
+            self._enter_loading("Loading keys\u2026")
             try:
                 daemon_result = await self._on_session_ready(session_key)
                 key_count = daemon_result.get("key_count", 0)
+                keys = daemon_result.get("keys", [])
             except Exception as exc:
                 self._enter_input()
                 self._show_error(f"Failed to load keys: {exc}")
                 return
 
-        # Phase 3: show success briefly, then exit
-        self._enter_success(f"Unlocked! {key_count} key(s) loaded.")
-        await asyncio.sleep(_SUCCESS_PAUSE)
-
-        self.result = UnlockResult(session_key=session_key, key_count=key_count)
-        self.exit()
+        # Phase 3: show success with key details — user dismisses manually
+        self.result = UnlockResult(
+            session_key=session_key, key_count=key_count, keys=keys
+        )
+        self._is_success = True
+        self._enter_success(key_count, keys)
 
     async def _run_bw_unlock(self, password: str) -> str | None:
         """Execute ``bw unlock --raw`` and return the session key.

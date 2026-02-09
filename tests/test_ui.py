@@ -74,14 +74,24 @@ class TestDetectUiMode:
 
 
 class TestGraphicalUnlockUI:
-    def test_raises_not_implemented(self) -> None:
-        ui = GraphicalUnlockUI()
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            ui.run()
+    def test_raises_without_gtk(self) -> None:
+        with patch("bwssh.ui._graphical.GTK_AVAILABLE", False):
+            ui = GraphicalUnlockUI()
+            with pytest.raises(
+                RuntimeError, match="GTK 4 / libadwaita is not available"
+            ):
+                ui.run()
 
     def test_accepts_bw_path(self) -> None:
         ui = GraphicalUnlockUI(bw_path="/usr/bin/bw")
         assert ui._bw_path == "/usr/bin/bw"
+
+    def test_accepts_on_session_ready(self) -> None:
+        async def hook(_key: str) -> dict[str, Any]:
+            return {"key_count": 1}
+
+        ui = GraphicalUnlockUI(on_session_ready=hook)
+        assert ui._on_session_ready is hook
 
 
 class TestCreateUnlockUi:
@@ -90,9 +100,22 @@ class TestCreateUnlockUi:
             ui = create_unlock_ui()
         assert isinstance(ui, TuiUnlockUI)
 
-    def test_returns_tui_even_when_graphical_detected(self) -> None:
-        """Graphical is not yet implemented — factory falls back to TUI."""
-        with patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+    def test_returns_graphical_when_gtk_available(self) -> None:
+        """With GTK available and DISPLAY set, factory returns GraphicalUnlockUI."""
+        with (
+            patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True),
+            patch("bwssh.ui.GTK_AVAILABLE", True),
+        ):
+            ui = create_unlock_ui()
+        assert isinstance(ui, GraphicalUnlockUI)
+
+    def test_returns_tui_when_graphical_unavailable(self) -> None:
+        """Without GTK or terminal, factory falls back to TUI."""
+        with (
+            patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True),
+            patch("bwssh.ui.GTK_AVAILABLE", False),
+            patch("bwssh.ui.TERMINAL_AVAILABLE", False),
+        ):
             ui = create_unlock_ui()
         assert isinstance(ui, TuiUnlockUI)
 
