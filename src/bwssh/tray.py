@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # --- Graceful AppIndicator3 availability detection --------------------------
 
 TRAY_AVAILABLE = False
+_NOTIFY_AVAILABLE = False
 
 try:
     import gi  # pyright: ignore[reportMissingImports]
@@ -56,6 +57,17 @@ try:
     from gi.repository import GLib, Gtk  # pyright: ignore[reportMissingImports]
 
     TRAY_AVAILABLE = True
+
+    # Desktop notifications (optional; tray works without them).
+    try:
+        gi.require_version("Notify", "0.7")
+        from gi.repository import (  # pyright: ignore[reportMissingImports]
+            Notify as _Notify,
+        )
+
+        _NOTIFY_AVAILABLE = True
+    except (ImportError, ValueError):
+        logger.debug("libnotify not available; notifications disabled")
 except (ImportError, ValueError) as _exc:
     logger.debug("AppIndicator3 not available: %s", _exc)
 
@@ -99,6 +111,16 @@ class TrayIcon:
         self._locked: bool | None = None
         self._key_count: int = 0
         self._connected: bool = False
+        self._first_poll: bool = True
+
+        # Desktop notifications (optional)
+        self._notifications_enabled: bool = False
+        if _NOTIFY_AVAILABLE:
+            try:
+                _Notify.init("bwssh")
+                self._notifications_enabled = True
+            except Exception:
+                logger.debug("Failed to initialise libnotify", exc_info=True)
 
         # Build the indicator
         self._indicator = AppIndicator3.Indicator.new(
@@ -129,6 +151,9 @@ class TrayIcon:
 
     def _do_poll(self) -> None:
         """Poll daemon status and update icon + menu."""
+        prev_locked = self._locked
+        prev_connected = self._connected
+
         try:
             result = asyncio.run(self._client.send_command("status", {}))
             self._connected = True
@@ -142,6 +167,11 @@ class TrayIcon:
         self._update_icon()
         self._build_menu()
 
+        # Fire desktop notification on state transitions (skip first poll)
+        if not self._first_poll:
+            self._notify_state_change(prev_locked, prev_connected)
+        self._first_poll = False
+
     def _periodic_poll(self) -> bool:
         """GLib timeout callback — poll and keep the timer alive."""
         self._do_poll()
@@ -151,6 +181,57 @@ class TrayIcon:
         """GLib timeout callback — poll once then remove the timer."""
         self._do_poll()
         return False  # GLib.SOURCE_REMOVE
+
+    # -- Notifications --------------------------------------------------------
+
+    def _notify_state_change(
+        self, prev_locked: bool | None, prev_connected: bool
+    ) -> None:
+        """Send a desktop notification when the daemon state changes."""
+        if not self._notifications_enabled:
+            return
+
+        # Disconnected -> Connected
+        if not prev_connected and self._connected:
+            if self._locked:
+                self._send_notification(
+                    "Agent Connected", "Vault is locked", _ICON_LOCKED
+                )
+            else:
+                self._send_notification(
+                    "Agent Connected",
+                    f"Vault is unlocked ({self._key_count} keys)",
+                    _ICON_UNLOCKED,
+                )
+            return
+
+        # Connected -> Disconnected
+        if prev_connected and not self._connected:
+            self._send_notification(
+                "Agent Disconnected", "Daemon is not running", _ICON_DISCONNECTED
+            )
+            return
+
+        # Locked -> Unlocked
+        if self._connected and prev_locked is True and self._locked is False:
+            self._send_notification(
+                "Vault Unlocked",
+                f"{self._key_count} SSH key(s) loaded",
+                _ICON_UNLOCKED,
+            )
+            return
+
+        # Unlocked -> Locked
+        if self._connected and prev_locked is False and self._locked is True:
+            self._send_notification("Vault Locked", "SSH keys cleared", _ICON_LOCKED)
+
+    def _send_notification(self, summary: str, body: str, icon: str) -> None:
+        """Show a desktop notification via libnotify."""
+        try:
+            notification = _Notify.Notification.new(summary, body, icon)
+            notification.show()
+        except Exception:
+            logger.debug("Failed to send notification", exc_info=True)
 
     # -- Icon -----------------------------------------------------------------
 
@@ -256,4 +337,6 @@ class TrayIcon:
 
     def _on_quit(self, _item: Any) -> None:
         """Exit the tray application."""
+        if self._notifications_enabled:
+            _Notify.uninit()
         Gtk.main_quit()

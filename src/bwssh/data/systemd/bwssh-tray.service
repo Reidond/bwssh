@@ -1,0 +1,13 @@
+[Unit]
+Description=Bitwarden SSH Agent Tray Icon
+Documentation=https://github.com/reidond/bwssh
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={exe_path} tray
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

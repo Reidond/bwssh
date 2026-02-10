@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=bwssh Tray
+Comment=Bitwarden SSH Agent status tray icon
+Exec={exe_path} tray
+Icon=security-high-symbolic
+Terminal=false
+Categories=System;Security;
+X-GNOME-Autostart-enabled=true

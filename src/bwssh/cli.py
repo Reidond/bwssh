@@ -248,32 +248,56 @@ def stop() -> None:
     raise SystemExit(1)
 
 
+def _xdg_autostart_dir() -> Path:
+    return Path.home() / ".config" / "autostart"
+
+
 @main.command()
 @click.option("--user-systemd", is_flag=True, help="Install systemd user units")
 @click.option("--polkit", is_flag=True, help="Print polkit policy file")
-def install(user_systemd: bool, polkit: bool) -> None:
-    """Install systemd units or polkit policy."""
-    if not (user_systemd or polkit):
-        click.echo("Error: specify --user-systemd or --polkit", err=True)
+@click.option(
+    "--tray-autostart",
+    is_flag=True,
+    help="Install XDG autostart entry for the tray icon",
+)
+def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
+    """Install systemd units, polkit policy, or tray autostart.
+
+    Flags can be combined, e.g.
+    ``bwssh install --user-systemd --tray-autostart``.
+    """
+    if not (user_systemd or polkit or tray_autostart):
+        click.echo(
+            "Error: specify --user-systemd, --polkit, or --tray-autostart",
+            err=True,
+        )
         raise SystemExit(1)
 
     if user_systemd:
         target = _systemd_user_dir()
         target.mkdir(parents=True, exist_ok=True)
 
-        exe_path = shutil.which("bwssh-agentd") or "bwssh-agentd"
+        # Agent daemon units
+        agentd_path = shutil.which("bwssh-agentd") or "bwssh-agentd"
         service_template = _read_package_data("systemd/bwssh-agent.service")
         (target / "bwssh-agent.service").write_text(
-            service_template.format(exe_path=exe_path)
+            service_template.format(exe_path=agentd_path)
         )
         (target / "bwssh-agent.socket").write_text(
             _read_package_data("systemd/bwssh-agent.socket")
         )
 
+        # Tray unit
+        bwssh_path = shutil.which("bwssh") or "bwssh"
+        tray_service_template = _read_package_data("systemd/bwssh-tray.service")
+        (target / "bwssh-tray.service").write_text(
+            tray_service_template.format(exe_path=bwssh_path)
+        )
+
         click.echo(f"Installed systemd units to {target}")
         click.echo(
             "Run: systemctl --user daemon-reload && "
-            "systemctl --user enable bwssh-agent.socket"
+            "systemctl --user enable bwssh-agent.socket bwssh-tray.service"
         )
 
     if polkit:
@@ -286,6 +310,18 @@ def install(user_systemd: bool, polkit: bool) -> None:
             "/usr/share/polkit-1/actions/io.github.reidond.bwssh.policy > /dev/null",
             err=True,
         )
+
+    if tray_autostart:
+        bwssh_path = shutil.which("bwssh") or "bwssh"
+
+        autostart_dir = _xdg_autostart_dir()
+        autostart_dir.mkdir(parents=True, exist_ok=True)
+
+        desktop_template = _read_package_data("autostart/bwssh-tray.desktop")
+        desktop_path = autostart_dir / "bwssh-tray.desktop"
+        desktop_path.write_text(desktop_template.format(exe_path=bwssh_path))
+        click.echo(f"Installed XDG autostart entry: {desktop_path}")
+        click.echo("The tray will start automatically on next login.")
 
 
 @main.command()

@@ -10,7 +10,9 @@ if TYPE_CHECKING:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from click.testing import CliRunner
 
+from bwssh.cli import main as cli_main
 from bwssh.control import ControlError
 
 # The module must always be importable even when AppIndicator3 is missing.
@@ -77,6 +79,15 @@ def _make_gi_mocks() -> dict[str, MagicMock]:
     glib.timeout_add_seconds = MagicMock()
     mocks["GLib"] = glib
 
+    # Notify (libnotify) — for desktop notifications
+    notify = MagicMock()
+    notification_instance = MagicMock()
+    notify.Notification.new.return_value = notification_instance
+    notify.init = MagicMock()
+    notify.uninit = MagicMock()
+    mocks["Notify"] = notify
+    mocks["notification"] = notification_instance
+
     return mocks
 
 
@@ -99,6 +110,8 @@ def gi_patched(
         ),
         patch("bwssh.tray.Gtk", gi_mocks["Gtk"], create=True),
         patch("bwssh.tray.GLib", gi_mocks["GLib"], create=True),
+        patch("bwssh.tray._NOTIFY_AVAILABLE", True),
+        patch("bwssh.tray._Notify", gi_mocks["Notify"], create=True),
     ):
         yield gi_mocks
 
@@ -140,6 +153,10 @@ class TestTrayIconInit:
         assert tray._connected is False
         assert tray._locked is None
         assert tray._key_count == 0
+        assert tray._first_poll is True
+
+    def test_notifications_initialised(self, tray: TrayIcon) -> None:
+        assert tray._notifications_enabled is True
 
 
 class TestPollDaemonStatus:
@@ -466,3 +483,267 @@ class TestRun:
             tray.run()
 
         mock_poll.assert_called_once()
+
+
+class TestNotifications:
+    """Desktop notification state-transition tests."""
+
+    def test_no_notification_on_first_poll(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """First poll should never fire a notification."""
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 3},
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_not_called()
+
+    def test_notification_on_unlock(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Should notify when transitioning from locked to unlocked."""
+        # First poll (locked) — no notification
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": True, "key_count": 0},
+        ):
+            tray._do_poll()
+
+        # Second poll (unlocked) — should notify
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 3},
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_called_once()
+        summary = gi_patched["Notify"].Notification.new.call_args[0][0]
+        assert "Unlocked" in summary
+        gi_patched["notification"].show.assert_called_once()
+
+    def test_notification_on_lock(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Should notify when transitioning from unlocked to locked."""
+        # First poll (unlocked)
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 3},
+        ):
+            tray._do_poll()
+
+        # Second poll (locked) — should notify
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": True, "key_count": 0},
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_called_once()
+        summary = gi_patched["Notify"].Notification.new.call_args[0][0]
+        assert "Locked" in summary
+        gi_patched["notification"].show.assert_called_once()
+
+    def test_notification_on_disconnect(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Should notify when daemon disconnects."""
+        # First poll (connected, unlocked)
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 3},
+        ):
+            tray._do_poll()
+
+        # Second poll (disconnected) — should notify
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            side_effect=OSError,
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_called_once()
+        summary = gi_patched["Notify"].Notification.new.call_args[0][0]
+        assert "Disconnected" in summary
+        gi_patched["notification"].show.assert_called_once()
+
+    def test_notification_on_reconnect(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Should notify when daemon reconnects."""
+        # First poll (connected) — skip notification
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 2},
+        ):
+            tray._do_poll()
+
+        # Second poll (disconnected) — fires "Disconnected" notification
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            side_effect=OSError,
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.reset_mock()
+        gi_patched["notification"].show.reset_mock()
+
+        # Third poll (reconnected) — should fire "Connected" notification
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": True, "key_count": 0},
+        ):
+            tray._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_called_once()
+        summary = gi_patched["Notify"].Notification.new.call_args[0][0]
+        assert "Connected" in summary
+
+    def test_no_notification_when_state_unchanged(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """No notification when state does not change between polls."""
+        result = {"locked": False, "key_count": 3}
+        with patch.object(
+            tray._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value=result,
+        ):
+            tray._do_poll()  # first poll — no notification
+            tray._do_poll()  # second poll — same state
+
+        gi_patched["Notify"].Notification.new.assert_not_called()
+
+    def test_no_notification_when_notify_unavailable(
+        self,
+        tmp_path: Path,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Notifications are silently skipped when libnotify is absent."""
+        with patch("bwssh.tray._NOTIFY_AVAILABLE", False):
+            t = TrayIcon(tmp_path / "control.sock")
+
+        assert t._notifications_enabled is False
+
+        t._connected = True
+        t._locked = True
+        t._first_poll = False
+
+        with patch.object(
+            t._client,
+            "send_command",
+            new_callable=AsyncMock,
+            return_value={"locked": False, "key_count": 1},
+        ):
+            t._do_poll()
+
+        gi_patched["Notify"].Notification.new.assert_not_called()
+
+    def test_on_quit_uninits_notify(
+        self,
+        tray: TrayIcon,
+        gi_patched: dict[str, MagicMock],
+    ) -> None:
+        """Quit action should call Notify.uninit when enabled."""
+        tray._on_quit(MagicMock())
+        gi_patched["Notify"].uninit.assert_called_once()
+
+
+class TestInstallTrayAutostart:
+    """Test the ``bwssh install --tray-autostart`` CLI command."""
+
+    def test_installs_desktop_entry(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        autostart_dir = tmp_path / "autostart"
+
+        with (
+            patch("bwssh.cli._xdg_autostart_dir", return_value=autostart_dir),
+            patch("bwssh.cli.shutil.which", return_value="/usr/bin/bwssh"),
+        ):
+            result = runner.invoke(cli_main, ["install", "--tray-autostart"])
+
+        assert result.exit_code == 0
+
+        desktop_path = autostart_dir / "bwssh-tray.desktop"
+        assert desktop_path.exists()
+        content = desktop_path.read_text()
+        assert "Exec=/usr/bin/bwssh tray" in content
+
+    def test_user_systemd_installs_tray_service(self, tmp_path: Path) -> None:
+        """``--user-systemd`` includes bwssh-tray.service."""
+        runner = CliRunner()
+        systemd_dir = tmp_path / "systemd"
+
+        with patch("bwssh.cli._systemd_user_dir", return_value=systemd_dir):
+            result = runner.invoke(cli_main, ["install", "--user-systemd"])
+
+        assert result.exit_code == 0
+        service_path = systemd_dir / "bwssh-tray.service"
+        assert service_path.exists()
+        content = service_path.read_text()
+        assert "After=graphical-session.target" in content
+
+    def test_chained_flags(self, tmp_path: Path) -> None:
+        """Both ``--user-systemd`` and ``--tray-autostart`` can be combined."""
+        runner = CliRunner()
+        autostart_dir = tmp_path / "autostart"
+        systemd_dir = tmp_path / "systemd"
+
+        with (
+            patch("bwssh.cli._xdg_autostart_dir", return_value=autostart_dir),
+            patch("bwssh.cli._systemd_user_dir", return_value=systemd_dir),
+            patch("bwssh.cli.shutil.which", return_value="/usr/bin/bwssh"),
+        ):
+            result = runner.invoke(
+                cli_main, ["install", "--user-systemd", "--tray-autostart"]
+            )
+
+        assert result.exit_code == 0
+        # systemd units installed
+        assert (systemd_dir / "bwssh-agent.service").exists()
+        assert (systemd_dir / "bwssh-agent.socket").exists()
+        assert (systemd_dir / "bwssh-tray.service").exists()
+        # XDG autostart installed
+        assert (autostart_dir / "bwssh-tray.desktop").exists()
+
+    def test_error_without_flags(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli_main, ["install"])
+
+        assert result.exit_code == 1
+        assert "--tray-autostart" in result.output

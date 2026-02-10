@@ -176,6 +176,7 @@ class TestInstallCommand:
         assert "systemctl" in result.output
         assert (target / "bwssh-agent.service").exists()
         assert (target / "bwssh-agent.socket").exists()
+        assert (target / "bwssh-tray.service").exists()
 
     def test_install_polkit(self, runner: CliRunner) -> None:
         result = runner.invoke(main, ["install", "--polkit"])
