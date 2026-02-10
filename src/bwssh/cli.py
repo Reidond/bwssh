@@ -370,6 +370,29 @@ def sync() -> None:
 
 
 @main.command()
+def tray() -> None:
+    """Run system tray icon showing agent status.
+
+    Displays a persistent tray icon that reflects the current daemon
+    state (locked / unlocked / disconnected) and offers quick actions
+    via a context menu.  Requires AppIndicator3 (libayatana-appindicator).
+    """
+    from bwssh.tray import TRAY_AVAILABLE, TrayIcon  # noqa: PLC0415
+
+    if not TRAY_AVAILABLE:
+        click.echo(
+            "Error: AppIndicator3 not available. "
+            "Install libayatana-appindicator3-1 or libappindicator-gtk3.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    socket_path = _get_control_socket()
+    tray_icon = TrayIcon(socket_path)
+    tray_icon.run()
+
+
+@main.command()
 def keys() -> None:
     """List loaded SSH keys."""
     try:
