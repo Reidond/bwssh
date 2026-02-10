@@ -405,6 +405,14 @@ def sync() -> None:
         _handle_control_error(e)
 
 
+def _tray_lock_path() -> Path:
+    """Return the path used for tray single-instance locking."""
+    xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    lock_dir = Path(xdg) / "bwssh"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / "tray.lock"
+
+
 @main.command()
 def tray() -> None:
     """Run system tray icon showing agent status.
@@ -412,7 +420,13 @@ def tray() -> None:
     Displays a persistent tray icon that reflects the current daemon
     state (locked / unlocked / disconnected) and offers quick actions
     via a context menu.  Requires AppIndicator3 (libayatana-appindicator).
+
+    Only one instance can run at a time; a second invocation exits
+    immediately so that overlapping autostart mechanisms (systemd +
+    XDG autostart) do not produce duplicate tray icons.
     """
+    import fcntl  # noqa: PLC0415
+
     from bwssh.tray import TRAY_AVAILABLE, TrayIcon  # noqa: PLC0415
 
     if not TRAY_AVAILABLE:
@@ -422,6 +436,22 @@ def tray() -> None:
             err=True,
         )
         raise SystemExit(1)
+
+    # Single-instance guard: acquire an exclusive lock so that only one
+    # ``bwssh tray`` process runs at a time.  If another instance already
+    # holds the lock we exit silently (this is expected when both systemd
+    # and XDG autostart are enabled).
+    lock_path = _tray_lock_path()
+    lock_file = lock_path.open("w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Another tray instance is already running.
+        lock_file.close()
+        click.echo("Another bwssh tray is already running.", err=True)
+        raise SystemExit(0) from None
+
+    # Keep lock_file open (and thus locked) for the lifetime of the process.
 
     socket_path = _get_control_socket()
     tray_icon = TrayIcon(socket_path)

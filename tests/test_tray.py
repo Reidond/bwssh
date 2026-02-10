@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -682,6 +683,54 @@ class TestNotifications:
         """Quit action should call Notify.uninit when enabled."""
         tray._on_quit(MagicMock())
         gi_patched["Notify"].uninit.assert_called_once()
+
+
+class TestTraySingleInstance:
+    """Verify the single-instance lock prevents duplicate tray icons."""
+
+    def test_second_instance_exits_cleanly(self, tmp_path: Path) -> None:
+        """A second ``bwssh tray`` exits with code 0 when one is running."""
+        lock_path = tmp_path / "bwssh" / "tray.lock"
+        lock_path.parent.mkdir(parents=True)
+
+        # Simulate a first instance holding the lock.
+        lock_file = lock_path.open("w")
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        runner = CliRunner()
+        with (
+            patch("bwssh.cli._tray_lock_path", return_value=lock_path),
+            patch("bwssh.tray.TRAY_AVAILABLE", True),
+        ):
+            result = runner.invoke(cli_main, ["tray"])
+
+        assert result.exit_code == 0
+        assert "already running" in result.output
+
+        lock_file.close()
+
+    def test_first_instance_acquires_lock(self, tmp_path: Path) -> None:
+        """The first instance acquires the lock and proceeds to run."""
+        lock_path = tmp_path / "bwssh" / "tray.lock"
+        lock_path.parent.mkdir(parents=True)
+
+        runner = CliRunner()
+        with (
+            patch("bwssh.cli._tray_lock_path", return_value=lock_path),
+            patch("bwssh.tray.TRAY_AVAILABLE", True),
+            patch("bwssh.tray.TrayIcon") as mock_cls,
+            patch("bwssh.cli._get_control_socket", return_value=tmp_path / "ctl.sock"),
+        ):
+            mock_cls.return_value.run = MagicMock()
+            result = runner.invoke(cli_main, ["tray"])
+
+        assert result.exit_code == 0
+        mock_cls.return_value.run.assert_called_once()
+
+        # Lock file should now be unlockable (no longer held after process exit)
+        lf = lock_path.open("w")
+        fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)  # should not raise
+        lf.close()
 
 
 class TestInstallTrayAutostart:
