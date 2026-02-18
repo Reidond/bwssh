@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import tomllib
-from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
+from pathlib import Path
+from typing import Any
+from unittest.mock import Mock, patch
 
 import pytest
 from click.testing import CliRunner
 
-from bwssh.cli import _write_config_file, main
-from bwssh.config import load_config
+from bwssh.cli import (
+    _build_unlock_params,
+    _run_unlock_ui,
+    _runtime_env_path,
+    _write_config_file,
+    main,
+)
+from bwssh.config import BitwardenConfig, BwsshConfig, load_config
 from bwssh.control import ControlError
 from bwssh.ui._base import UnlockResult
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -170,13 +174,25 @@ class TestInstallCommand:
 
     def test_install_user_systemd(self, runner: CliRunner, tmp_path: Path) -> None:
         target = tmp_path / "systemd" / "user"
-        with patch("bwssh.cli._systemd_user_dir", return_value=target):
+        with (
+            patch("bwssh.cli._systemd_user_dir", return_value=target),
+            patch(
+                "bwssh.cli._runtime_env_path",
+                return_value="/home/user/.local/bin:/usr/bin:/bin",
+            ),
+        ):
             result = runner.invoke(main, ["install", "--user-systemd"])
         assert result.exit_code == 0
         assert "systemctl" in result.output
         assert (target / "bwssh-agent.service").exists()
         assert (target / "bwssh-agent.socket").exists()
         assert (target / "bwssh-tray.service").exists()
+        service_content = (target / "bwssh-agent.service").read_text()
+        assert (
+            'Environment="PATH=/home/user/.local/bin:/usr/bin:/bin"' in service_content
+        )
+        tray_content = (target / "bwssh-tray.service").read_text()
+        assert 'Environment="PATH=/home/user/.local/bin:/usr/bin:/bin"' in tray_content
 
     def test_install_polkit(self, runner: CliRunner) -> None:
         result = runner.invoke(main, ["install", "--polkit"])
@@ -193,8 +209,14 @@ class TestInstallCommand:
 class TestUnlockCommand:
     def test_unlock_via_env_session(self, runner: CliRunner) -> None:
         """Unlock with BW_SESSION env var sends to daemon directly."""
+        unlock_params = {
+            "session_key": "mock-session",
+            "bw_exec_path": "/usr/bin/bw",
+            "env_path": "/usr/bin",
+        }
         with (
             patch("bwssh.cli._get_bw_session_from_env", return_value="mock-session"),
+            patch("bwssh.cli._build_unlock_params", return_value=unlock_params),
             patch(
                 "bwssh.cli._send_command",
                 return_value={"unlocked": True, "key_count": 1},
@@ -207,12 +229,21 @@ class TestUnlockCommand:
 
     def test_unlock_with_session_option(self, runner: CliRunner) -> None:
         """Unlock with --session sends to daemon directly."""
-        with patch(
-            "bwssh.cli._send_command", return_value={"unlocked": True, "key_count": 2}
-        ) as mock_send:
+        unlock_params = {
+            "session_key": "my-secret-key",
+            "bw_exec_path": "/usr/bin/bw",
+            "env_path": "/usr/bin",
+        }
+        with (
+            patch(
+                "bwssh.cli._send_command",
+                return_value={"unlocked": True, "key_count": 2},
+            ) as mock_send,
+            patch("bwssh.cli._build_unlock_params", return_value=unlock_params),
+        ):
             result = runner.invoke(main, ["unlock", "--session", "my-secret-key"])
         assert result.exit_code == 0
-        mock_send.assert_called_once_with("unlock", {"session_key": "my-secret-key"})
+        mock_send.assert_called_once_with("unlock", unlock_params)
 
     def test_unlock_via_tui_success(self, runner: CliRunner) -> None:
         """Interactive unlock uses TUI and returns key count."""
@@ -271,6 +302,109 @@ class TestUnlockCommand:
             result = runner.invoke(main, ["unlock"])
         assert result.exit_code != 0
         assert "polkit" in result.output.lower()
+
+
+class TestUnlockUiRunner:
+    def test_uses_configured_bw_path(self) -> None:
+        mock_result = UnlockResult(session_key="session", key_count=2)
+        mock_ui = Mock()
+        mock_ui.run.return_value = mock_result
+        cfg = BwsshConfig(bitwarden=BitwardenConfig(bw_path="/opt/bitwarden/bw"))
+
+        with (
+            patch("bwssh.cli.load_config", return_value=cfg),
+            patch("bwssh.ui.create_unlock_ui", return_value=mock_ui) as mock_factory,
+        ):
+            result = _run_unlock_ui()
+
+        assert result is mock_result
+        mock_factory.assert_called_once()
+        assert mock_factory.call_args.args[0] == "/opt/bitwarden/bw"
+
+
+class TestUnlockParams:
+    def test_includes_resolved_bw_path_and_process_path(self) -> None:
+        cfg = BwsshConfig(bitwarden=BitwardenConfig(bw_path="bw"))
+
+        with (
+            patch("bwssh.cli.load_config", return_value=cfg),
+            patch("bwssh.cli.shutil.which", return_value="/opt/bin/bw"),
+            patch.dict("os.environ", {"PATH": "/opt/bin:/usr/bin"}, clear=True),
+        ):
+            params = _build_unlock_params("abc")
+
+        assert params == {
+            "session_key": "abc",
+            "bw_exec_path": "/opt/bin/bw",
+            "env_path": "/opt/bin:/usr/bin",
+        }
+
+    def test_falls_back_to_configured_bw_path_when_not_resolvable(self) -> None:
+        cfg = BwsshConfig(bitwarden=BitwardenConfig(bw_path="/custom/bw"))
+
+        with (
+            patch("bwssh.cli.load_config", return_value=cfg),
+            patch("bwssh.cli.shutil.which", return_value=None),
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            params = _build_unlock_params("abc")
+
+        assert params == {
+            "session_key": "abc",
+            "bw_exec_path": "/custom/bw",
+        }
+
+    def test_omits_env_path_when_node_missing_in_path(self) -> None:
+        cfg = BwsshConfig(bitwarden=BitwardenConfig(bw_path="bw"))
+
+        def _fake_which(cmd: str, path: str | None = None) -> str | None:
+            if cmd == "bw":
+                return "/opt/bin/bw"
+            if cmd == "node" and path == "/usr/bin:/bin":
+                return None
+            return None
+
+        with (
+            patch("bwssh.cli.load_config", return_value=cfg),
+            patch("bwssh.cli.shutil.which", side_effect=_fake_which),
+            patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}, clear=True),
+        ):
+            params = _build_unlock_params("abc")
+
+        assert params == {
+            "session_key": "abc",
+            "bw_exec_path": "/opt/bin/bw",
+        }
+
+
+class TestRuntimeEnvPath:
+    def test_prefers_current_process_path(self) -> None:
+        with (
+            patch.dict("os.environ", {"PATH": "/x:/y"}, clear=True),
+            patch("bwssh.cli.Path.exists", return_value=False),
+        ):
+            assert _runtime_env_path() == "/x:/y"
+
+    def test_falls_back_to_default_when_path_missing(self) -> None:
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bwssh.cli.Path.exists", return_value=False),
+        ):
+            assert _runtime_env_path() == "/usr/local/bin:/usr/bin:/bin"
+
+    def test_adds_mise_shims_when_present(self) -> None:
+        home = Path("/home/tester")
+
+        with (
+            patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}, clear=True),
+            patch("bwssh.cli.Path.home", return_value=home),
+            patch("bwssh.cli.Path.exists", return_value=True),
+        ):
+            expected = (
+                "/home/tester/.local/share/mise/shims:"
+                "/home/tester/.local/bin:/usr/bin:/bin"
+            )
+            assert _runtime_env_path() == expected
 
 
 # ---------------------------------------------------------------------------

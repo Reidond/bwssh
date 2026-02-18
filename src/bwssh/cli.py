@@ -23,6 +23,7 @@ from bwssh.config import _default_config_path, load_config
 from bwssh.control import ControlClient, ControlError
 
 _DAEMON_NOT_RUNNING = "Error: daemon not running. Start with: bwssh start"
+_DEFAULT_SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 def _read_package_data(path: str) -> str:
@@ -128,6 +129,46 @@ def _get_bw_session_from_env() -> str | None:
     return os.environ.get("BW_SESSION") or None
 
 
+def _build_unlock_params(
+    session_key: str, bw_path: str | None = None
+) -> dict[str, str]:
+    configured_bw_path = bw_path or load_config().bitwarden.bw_path
+    bw_exec_path = shutil.which(configured_bw_path) or configured_bw_path
+    params = {
+        "session_key": session_key,
+        "bw_exec_path": bw_exec_path,
+    }
+    env_path = os.environ.get("PATH")
+    if env_path and shutil.which("node", path=env_path):
+        params["env_path"] = env_path
+    return params
+
+
+def _runtime_env_path() -> str:
+    base_paths: list[str] = []
+    mise_shims = Path.home() / ".local" / "share" / "mise" / "shims"
+    local_bin = Path.home() / ".local" / "bin"
+    for candidate in (mise_shims, local_bin):
+        if candidate.exists():
+            base_paths.append(str(candidate))
+
+    env_path = os.environ.get("PATH")
+    if env_path:
+        base_paths.extend(part for part in env_path.split(":") if part)
+    else:
+        base_paths.extend(_DEFAULT_SYSTEM_PATH.split(":"))
+
+    unique_paths: list[str] = []
+    seen: set[str] = set()
+    for path_part in base_paths:
+        if path_part in seen:
+            continue
+        seen.add(path_part)
+        unique_paths.append(path_part)
+
+    return ":".join(unique_paths)
+
+
 def _run_unlock_ui(ui_mode: str | None = None) -> UnlockResult:
     """Run interactive unlock UI and return the full result.
 
@@ -141,12 +182,14 @@ def _run_unlock_ui(ui_mode: str | None = None) -> UnlockResult:
     """
     from bwssh.ui import create_unlock_ui  # noqa: PLC0415
 
-    bw_path = shutil.which("bw") or "bw"
+    bw_path = load_config().bitwarden.bw_path
     socket_path = _get_control_socket()
 
     async def _send_session(session_key: str) -> dict[str, Any]:
         client = ControlClient(socket_path)
-        result = await client.send_command("unlock", {"session_key": session_key})
+        result = await client.send_command(
+            "unlock", _build_unlock_params(session_key, bw_path=bw_path)
+        )
         # Fetch detailed key info for the success screen
         try:
             keys_result = await client.send_command("list_keys", {})
@@ -276,12 +319,13 @@ def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
     if user_systemd:
         target = _systemd_user_dir()
         target.mkdir(parents=True, exist_ok=True)
+        env_path = _runtime_env_path()
 
         # Agent daemon units
         agentd_path = shutil.which("bwssh-agentd") or "bwssh-agentd"
         service_template = _read_package_data("systemd/bwssh-agent.service")
         (target / "bwssh-agent.service").write_text(
-            service_template.format(exe_path=agentd_path)
+            service_template.format(exe_path=agentd_path, env_path=env_path)
         )
         (target / "bwssh-agent.socket").write_text(
             _read_package_data("systemd/bwssh-agent.socket")
@@ -291,7 +335,7 @@ def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
         bwssh_path = shutil.which("bwssh") or "bwssh"
         tray_service_template = _read_package_data("systemd/bwssh-tray.service")
         (target / "bwssh-tray.service").write_text(
-            tray_service_template.format(exe_path=bwssh_path)
+            tray_service_template.format(exe_path=bwssh_path, env_path=env_path)
         )
 
         click.echo(f"Installed systemd units to {target}")
@@ -360,7 +404,7 @@ def unlock(session_key: str | None, ui_mode: str | None) -> None:
 
     # Direct session key provided — send to daemon without TUI
     try:
-        result = _send_command("unlock", {"session_key": session_key})
+        result = _send_command("unlock", _build_unlock_params(session_key))
         key_count = result.get("key_count", 0)
         click.echo(f"Vault unlocked. {key_count} key(s) loaded.")
     except ControlError as e:

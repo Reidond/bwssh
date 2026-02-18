@@ -160,6 +160,51 @@ class TestRunBw:
             stderr=asyncio.subprocess.PIPE,
         )
 
+    @pytest.mark.asyncio
+    async def test_run_bw_uses_runtime_overrides(self) -> None:
+        provider = BitwardenProvider(bw_path="bw", item_ids=[])
+        with patch("bwssh.bitwarden.shutil.which", return_value="/custom/bin/node"):
+            provider.configure_runtime(
+                bw_path="/custom/bin/bw",
+                env_path="/custom/bin:/usr/bin",
+            )
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"{}", b""))
+        mock_proc.returncode = 0
+
+        with patch(
+            "asyncio.create_subprocess_exec", return_value=mock_proc
+        ) as mock_exec:
+            await provider._run_bw("status")
+
+        mock_exec.assert_called_once()
+        call_args = mock_exec.call_args
+        assert call_args.args[0] == "/custom/bin/bw"
+        assert call_args.args[1] == "status"
+        env = call_args.kwargs["env"]
+        assert env["PATH"] == "/custom/bin:/usr/bin"
+
+    @pytest.mark.asyncio
+    async def test_runtime_override_ignores_path_without_node(self) -> None:
+        provider = BitwardenProvider(bw_path="bw", item_ids=[])
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"{}", b""))
+        mock_proc.returncode = 0
+
+        with (
+            patch("bwssh.bitwarden.shutil.which", return_value=None),
+            patch(
+                "asyncio.create_subprocess_exec", return_value=mock_proc
+            ) as mock_exec,
+        ):
+            provider.configure_runtime(env_path="/usr/bin:/bin")
+            await provider._run_bw("status")
+
+        call_args = mock_exec.call_args
+        assert "env" not in call_args.kwargs
+
 
 class TestListIdentities:
     """Tests for listing SSH key identities from Bitwarden."""

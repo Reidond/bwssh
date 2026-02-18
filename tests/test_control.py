@@ -431,6 +431,71 @@ class TestUnlockMethod:
             control_server.shutdown()
             await task
 
+    @pytest.mark.asyncio
+    async def test_unlock_applies_runtime_bw_overrides(
+        self,
+        runtime_dir: Path,
+        control_socket_path: Path,
+        config: BwsshConfig,
+    ) -> None:
+        class _BitwardenWithRuntimeOverrides(MockBitwardenProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.runtime_config: dict[str, str | None] = {
+                    "bw_path": None,
+                    "env_path": None,
+                }
+
+            def configure_runtime(
+                self, *, bw_path: str | None = None, env_path: str | None = None
+            ) -> None:
+                self.runtime_config["bw_path"] = bw_path
+                self.runtime_config["env_path"] = env_path
+
+            async def list_identities(self, _session_key: str) -> list[Identity]:
+                return []
+
+            async def get_private_key(
+                self, _identity_id: str, _session_key: str
+            ) -> bytes:
+                msg = "unexpected get_private_key call"
+                raise AssertionError(msg)
+
+        bw = _BitwardenWithRuntimeOverrides()
+        agent = AgentServer(runtime_dir=runtime_dir, bitwarden=bw)
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            agent_server=agent,
+            bitwarden=bw,
+            config=config,
+        )
+
+        task = await _start_control(server)
+        try:
+            resp = await _send_raw(
+                control_socket_path,
+                {
+                    "method": "unlock",
+                    "id": 1,
+                    "params": {
+                        "session_key": "test",
+                        "bw_exec_path": "/opt/bin/bw",
+                        "env_path": "/opt/bin:/usr/bin",
+                    },
+                },
+            )
+            assert "result" in resp
+            result = resp["result"]
+            assert isinstance(result, dict)
+            assert result["unlocked"] is True
+            assert bw.runtime_config == {
+                "bw_path": "/opt/bin/bw",
+                "env_path": "/opt/bin:/usr/bin",
+            }
+        finally:
+            server.shutdown()
+            await task
+
 
 class TestSyncMethod:
     @pytest.mark.asyncio

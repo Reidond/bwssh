@@ -8,6 +8,9 @@ PartOf=graphical-session.target
 Type=simple
 ExecStart={exe_path} tray
 Restart=on-failure
+Environment="HOME=%h"
+Environment="XDG_RUNTIME_DIR=%t"
+Environment="PATH={env_path}"
 
 [Install]
 WantedBy=graphical-session.target

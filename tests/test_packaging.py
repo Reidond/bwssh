@@ -29,35 +29,35 @@ class TestServiceFile:
     def test_service_file_is_valid_ini(self) -> None:
         """Service file should be valid INI format."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         # Should not raise
         parser.read(path)
 
     def test_service_file_has_unit_section(self) -> None:
         """Service file should have [Unit] section."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Unit" in parser.sections()
 
     def test_service_file_has_service_section(self) -> None:
         """Service file should have [Service] section."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Service" in parser.sections()
 
     def test_service_file_has_install_section(self) -> None:
         """Service file should have [Install] section."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Install" in parser.sections()
 
     def test_service_has_description(self) -> None:
         """Service should have Description field."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Unit", "Description")
         assert "Bitwarden" in parser.get("Unit", "Description")
@@ -65,14 +65,14 @@ class TestServiceFile:
     def test_service_has_documentation(self) -> None:
         """Service should have Documentation field."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Unit", "Documentation")
 
     def test_service_requires_socket(self) -> None:
         """Service should require socket."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Unit", "Requires")
         assert "bwssh-agent.socket" in parser.get("Unit", "Requires")
@@ -80,14 +80,14 @@ class TestServiceFile:
     def test_service_type_is_simple(self) -> None:
         """Service type should be simple."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.get("Service", "Type") == "simple"
 
     def test_service_exec_start_is_template(self) -> None:
         """ExecStart should use {exe_path} template placeholder."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         exec_start = parser.get("Service", "ExecStart", raw=True)
         assert "{exe_path}" in exec_start
@@ -96,7 +96,7 @@ class TestServiceFile:
     def test_service_has_restart_policy(self) -> None:
         """Service should have Restart policy."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Service", "Restart")
         assert parser.get("Service", "Restart") == "on-failure"
@@ -104,15 +104,25 @@ class TestServiceFile:
     def test_service_has_umask(self) -> None:
         """Service should have UMask for security."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Service", "UMask")
         assert parser.get("Service", "UMask") == "0077"
 
+    def test_service_sets_home_environment(self) -> None:
+        path = self._get_service_path()
+        content = path.read_text()
+        assert 'Environment="HOME=%h"' in content
+
+    def test_service_sets_path_template_environment(self) -> None:
+        path = self._get_service_path()
+        content = path.read_text()
+        assert 'Environment="PATH={env_path}"' in content
+
     def test_service_install_also_socket(self) -> None:
         """Install section should also enable socket."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Install", "Also")
         assert "bwssh-agent.socket" in parser.get("Install", "Also")
@@ -120,7 +130,7 @@ class TestServiceFile:
     def test_service_wanted_by_default_target(self) -> None:
         """Service should be wanted by default.target."""
         path = self._get_service_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Install", "WantedBy")
         assert "default.target" in parser.get("Install", "WantedBy")
@@ -148,35 +158,35 @@ class TestSocketFile:
     def test_socket_file_is_valid_ini(self) -> None:
         """Socket file should be valid INI format."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         # Should not raise
         parser.read(path)
 
     def test_socket_file_has_unit_section(self) -> None:
         """Socket file should have [Unit] section."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Unit" in parser.sections()
 
     def test_socket_file_has_socket_section(self) -> None:
         """Socket file should have [Socket] section."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Socket" in parser.sections()
 
     def test_socket_file_has_install_section(self) -> None:
         """Socket file should have [Install] section."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert "Install" in parser.sections()
 
     def test_socket_has_description(self) -> None:
         """Socket should have Description field."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Unit", "Description")
         assert "Bitwarden" in parser.get("Unit", "Description")
@@ -184,14 +194,14 @@ class TestSocketFile:
     def test_socket_has_documentation(self) -> None:
         """Socket should have Documentation field."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Unit", "Documentation")
 
     def test_socket_listen_stream_uses_runtime_dir(self) -> None:
         """ListenStream should use %t (runtime dir) specifier."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Socket", "ListenStream")
         listen_stream = parser.get("Socket", "ListenStream", raw=True)
@@ -202,7 +212,7 @@ class TestSocketFile:
     def test_socket_mode_is_secure(self) -> None:
         """SocketMode should be 0600 (owner only)."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Socket", "SocketMode")
         assert parser.get("Socket", "SocketMode") == "0600"
@@ -210,7 +220,7 @@ class TestSocketFile:
     def test_directory_mode_is_secure(self) -> None:
         """DirectoryMode should be 0700 (owner only)."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Socket", "DirectoryMode")
         assert parser.get("Socket", "DirectoryMode") == "0700"
@@ -218,10 +228,32 @@ class TestSocketFile:
     def test_socket_wanted_by_sockets_target(self) -> None:
         """Socket should be wanted by sockets.target."""
         path = self._get_socket_path()
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(strict=False)
         parser.read(path)
         assert parser.has_option("Install", "WantedBy")
         assert "sockets.target" in parser.get("Install", "WantedBy")
+
+
+class TestTrayServiceFile:
+    @staticmethod
+    def _get_tray_service_path() -> Path:
+        return (
+            Path(__file__).parent.parent
+            / "src"
+            / "bwssh"
+            / "data"
+            / "systemd"
+            / "bwssh-tray.service"
+        )
+
+    def test_tray_service_file_exists(self) -> None:
+        assert self._get_tray_service_path().exists()
+
+    def test_tray_service_sets_runtime_environment(self) -> None:
+        content = self._get_tray_service_path().read_text()
+        assert 'Environment="HOME=%h"' in content
+        assert 'Environment="XDG_RUNTIME_DIR=%t"' in content
+        assert 'Environment="PATH={env_path}"' in content
 
 
 class TestPolkitPolicy:

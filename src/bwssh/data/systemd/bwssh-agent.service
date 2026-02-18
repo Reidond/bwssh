@@ -8,7 +8,9 @@ Type=simple
 ExecStart={exe_path} --foreground
 Restart=on-failure
 UMask=0077
+Environment="HOME=%h"
 Environment="XDG_RUNTIME_DIR=%t"
+Environment="PATH={env_path}"
 
 [Install]
 Also=bwssh-agent.socket

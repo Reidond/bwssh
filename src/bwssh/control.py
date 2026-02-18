@@ -238,6 +238,13 @@ class ControlServer:
             raise ControlError(_INVALID_REQUEST, "Missing session_key parameter")
 
         if self._bitwarden is not None and self._agent_server is not None:
+            configure_runtime = getattr(self._bitwarden, "configure_runtime", None)
+            if callable(configure_runtime):
+                configure_runtime(
+                    bw_path=params.get("bw_exec_path"),
+                    env_path=params.get("env_path"),
+                )
+
             # Store session key and load keys from Bitwarden
             self._bitwarden.unlock(session_key)
             identities = await self._bitwarden.list_identities(session_key)

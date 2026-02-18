@@ -6,6 +6,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -46,16 +48,32 @@ class BitwardenProvider:
     def __init__(self, bw_path: str, item_ids: list[str]) -> None:
         self._bw_path = bw_path
         self._item_ids = item_ids
+        self._exec_env: dict[str, str] | None = None
         self._session_key: str | None = None
         self._cached_identities: list[Identity] = []
         self._private_key_cache: dict[str, bytes] = {}  # identity_id -> private key
 
+    def configure_runtime(
+        self, *, bw_path: str | None = None, env_path: str | None = None
+    ) -> None:
+        if bw_path:
+            self._bw_path = bw_path
+        if env_path and shutil.which("node", path=env_path):
+            self._exec_env = os.environ.copy()
+            self._exec_env["PATH"] = env_path
+
     async def _run_bw(self, *args: str) -> Any:
+        kwargs: dict[str, Any] = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        if self._exec_env is not None:
+            kwargs["env"] = self._exec_env
+
         proc = await asyncio.create_subprocess_exec(
             self._bw_path,
             *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            **kwargs,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
