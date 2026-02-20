@@ -60,9 +60,7 @@ class TestAppIndicatorInstallHint:
     # -- gi (PyGObject missing) -----------------------------------------
 
     def test_fedora_gi(self) -> None:
-        hint = _install_hint_for_os_release(
-            'ID=fedora\n', missing="gi"
-        )
+        hint = _install_hint_for_os_release("ID=fedora\n", missing="gi")
         assert "python3-gobject" in hint
         assert "dnf" in hint
 
@@ -75,9 +73,7 @@ class TestAppIndicatorInstallHint:
     # -- gtk3 (GTK 3.0 typelib missing) ---------------------------------
 
     def test_fedora_gtk3(self) -> None:
-        hint = _install_hint_for_os_release(
-            'ID=fedora\n', missing="gtk3"
-        )
+        hint = _install_hint_for_os_release("ID=fedora\n", missing="gtk3")
         assert "gtk3" in hint
         assert "dnf" in hint
 

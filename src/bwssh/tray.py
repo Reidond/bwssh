@@ -144,10 +144,7 @@ def _appindicator3_hint(distro_ids: set[str]) -> str:
         return "sudo pacman -S libayatana-appindicator"
     if distro_ids & {"opensuse", "suse", "sles"}:
         return "sudo zypper install typelib-1_0-AyatanaAppIndicator3-0_1"
-    return (
-        "sudo apt install libayatana-appindicator3-1"
-        " gir1.2-ayatanaappindicator3-0.1"
-    )
+    return "sudo apt install libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1"
 
 
 _MISSING_LABELS = {
@@ -262,8 +259,7 @@ class TrayIcon:
     def __init__(self, socket_path: Path) -> None:
         if not TRAY_AVAILABLE:
             raise RuntimeError(
-                "AppIndicator3 is not available. "
-                + _appindicator_install_hint()
+                "AppIndicator3 is not available. " + _appindicator_install_hint()
             )
 
         self._socket_path = socket_path
