@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PyGObject>=3.50.0"]
+gui = ["PyGObject>=3.42.0,<3.50"]
 
 [project.scripts]
 bwssh = "bwssh.cli:main"
