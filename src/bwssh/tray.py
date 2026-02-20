@@ -95,16 +95,21 @@ _NOTIFY_ICON_DISCONNECTED = "network-offline-symbolic"
 # panels it's clearly dark enough to see.
 
 _LOCKED_SVG = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <g fill="none" stroke="#5a5a5a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+ viewBox="0 0 24 24">
+  <g fill="none" stroke="#5a5a5a" stroke-width="1.8"
+   stroke-linecap="round" stroke-linejoin="round">
     <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
-    <rect x="5" y="11" width="14" height="10" rx="2" fill="#5a5a5a" stroke="none"/>
+    <rect x="5" y="11" width="14" height="10" rx="2"
+     fill="#5a5a5a" stroke="none"/>
   </g>
 </svg>"""
 
 _UNLOCKED_SVG = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <g fill="none" stroke="#5a5a5a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+ viewBox="0 0 24 24">
+  <g fill="none" stroke="#5a5a5a" stroke-width="1.8"
+   stroke-linecap="round" stroke-linejoin="round">
     <path d="M5 12l1.2 7.5A2 2 0 0 0 8.2 21h7.6a2 2 0 0 0 2-1.5L19 12z"/>
     <path d="M5 12L12 3l7 9"/>
     <path d="M9.5 15.5l2 2 3.5-4.5"/>
