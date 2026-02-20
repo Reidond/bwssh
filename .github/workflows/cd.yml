@@ -1,6 +1,8 @@
 name: CD
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       bump:
@@ -45,7 +47,7 @@ jobs:
       - name: Bump version
         id: version
         run: |
-          uv version --bump ${{ inputs.bump }}
+          uv version --bump ${{ inputs.bump || 'patch' }}
           VERSION=$(uv version --short)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
