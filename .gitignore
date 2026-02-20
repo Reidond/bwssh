@@ -103,3 +103,4 @@ Thumbs.db
 *.log
 
 .sisyphus/
+.omc/

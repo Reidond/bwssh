@@ -13,12 +13,11 @@ import asyncio
 import logging
 import shutil
 import subprocess
-from typing import TYPE_CHECKING, Any
+import tempfile
+from pathlib import Path
+from typing import Any
 
 from bwssh.control import ControlClient, ControlError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +76,68 @@ except (ImportError, ValueError) as _exc:
 
 _POLL_INTERVAL_SECONDS = 5
 
-_ICON_LOCKED = "system-lock-screen-symbolic"
-_ICON_UNLOCKED = "security-high-symbolic"
-_ICON_DISCONNECTED = "network-offline-symbolic"
+# Fallback themed icons used for notifications (these don't appear in panel)
+_NOTIFY_ICON_LOCKED = "system-lock-screen-symbolic"
+_NOTIFY_ICON_UNLOCKED = "security-high-symbolic"
+_NOTIFY_ICON_DISCONNECTED = "network-offline-symbolic"
+
+# ---------------------------------------------------------------------------
+# Icon generation — SVG icons using absolute paths
+# ---------------------------------------------------------------------------
+
+# We write SVG files to a temp directory and pass their *absolute paths*
+# (without extension) as icon names to AppIndicator3.  This is the most
+# reliable approach across desktop environments — it avoids icon theme
+# lookup issues where the tray (a separate process) cannot find the icons.
+#
+# The SVGs use a medium grey (#5a5a5a) fill which is visible on both dark
+# and light panels.  On dark panels it appears as a mid-tone; on light
+# panels it's clearly dark enough to see.
+
+_LOCKED_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g fill="none" stroke="#5a5a5a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+    <rect x="5" y="11" width="14" height="10" rx="2" fill="#5a5a5a" stroke="none"/>
+  </g>
+</svg>"""
+
+_UNLOCKED_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g fill="none" stroke="#5a5a5a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 12l1.2 7.5A2 2 0 0 0 8.2 21h7.6a2 2 0 0 0 2-1.5L19 12z"/>
+    <path d="M5 12L12 3l7 9"/>
+    <path d="M9.5 15.5l2 2 3.5-4.5"/>
+  </g>
+</svg>"""
+
+_DISCONNECTED_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g fill="none" stroke="#5a5a5a" stroke-width="1.8" stroke-linecap="round">
+    <circle cx="12" cy="12" r="9"/>
+    <line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/>
+  </g>
+</svg>"""
+
+
+def _create_icon_dir() -> tuple[Path, str, str, str]:
+    """Create a temp directory with SVG icons and return absolute paths.
+
+    Returns ``(icon_dir, locked_path, unlocked_path, disconnected_path)``
+    where each ``*_path`` is an absolute path **without** the ``.svg``
+    extension, suitable for passing directly to ``set_icon_full``.
+    """
+    icon_dir = Path(tempfile.mkdtemp(prefix="bwssh-icons-"))
+
+    locked = icon_dir / "bwssh-locked"
+    unlocked = icon_dir / "bwssh-unlocked"
+    disconnected = icon_dir / "bwssh-disconnected"
+
+    locked.with_suffix(".svg").write_text(_LOCKED_SVG)
+    unlocked.with_suffix(".svg").write_text(_UNLOCKED_SVG)
+    disconnected.with_suffix(".svg").write_text(_DISCONNECTED_SVG)
+
+    return icon_dir, str(locked), str(unlocked), str(disconnected)
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +180,19 @@ class TrayIcon:
             except Exception:
                 logger.debug("Failed to initialise libnotify", exc_info=True)
 
-        # Build the indicator
+        # Generate SVG icons and get their absolute paths (without extension)
+        (
+            self._icon_dir,
+            self._icon_locked,
+            self._icon_unlocked,
+            self._icon_disconnected,
+        ) = _create_icon_dir()
+
+        # Build the indicator — use absolute path so AppIndicator finds the
+        # icon immediately without needing an icon theme lookup.
         self._indicator = AppIndicator3.Indicator.new(
             "bwssh",
-            _ICON_DISCONNECTED,
+            self._icon_disconnected,
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
         )
         self._indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -195,20 +262,22 @@ class TrayIcon:
         if not prev_connected and self._connected:
             if self._locked:
                 self._send_notification(
-                    "Agent Connected", "Vault is locked", _ICON_LOCKED
+                    "Agent Connected", "Vault is locked", _NOTIFY_ICON_LOCKED
                 )
             else:
                 self._send_notification(
                     "Agent Connected",
                     f"Vault is unlocked ({self._key_count} keys)",
-                    _ICON_UNLOCKED,
+                    _NOTIFY_ICON_UNLOCKED,
                 )
             return
 
         # Connected -> Disconnected
         if prev_connected and not self._connected:
             self._send_notification(
-                "Agent Disconnected", "Daemon is not running", _ICON_DISCONNECTED
+                "Agent Disconnected",
+                "Daemon is not running",
+                _NOTIFY_ICON_DISCONNECTED,
             )
             return
 
@@ -217,13 +286,15 @@ class TrayIcon:
             self._send_notification(
                 "Vault Unlocked",
                 f"{self._key_count} SSH key(s) loaded",
-                _ICON_UNLOCKED,
+                _NOTIFY_ICON_UNLOCKED,
             )
             return
 
         # Unlocked -> Locked
         if self._connected and prev_locked is False and self._locked is True:
-            self._send_notification("Vault Locked", "SSH keys cleared", _ICON_LOCKED)
+            self._send_notification(
+                "Vault Locked", "SSH keys cleared", _NOTIFY_ICON_LOCKED
+            )
 
     def _send_notification(self, summary: str, body: str, icon: str) -> None:
         """Show a desktop notification via libnotify."""
@@ -238,11 +309,11 @@ class TrayIcon:
     def _update_icon(self) -> None:
         """Set the tray icon based on current state."""
         if not self._connected:
-            icon = _ICON_DISCONNECTED
+            icon = self._icon_disconnected
         elif self._locked:
-            icon = _ICON_LOCKED
+            icon = self._icon_locked
         else:
-            icon = _ICON_UNLOCKED
+            icon = self._icon_unlocked
 
         self._indicator.set_icon_full(icon, self._status_text())
 
@@ -339,4 +410,6 @@ class TrayIcon:
         """Exit the tray application."""
         if self._notifications_enabled:
             _Notify.uninit()
+        # Clean up generated icon files
+        shutil.rmtree(self._icon_dir, ignore_errors=True)
         Gtk.main_quit()

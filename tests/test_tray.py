@@ -100,8 +100,17 @@ def gi_mocks() -> dict[str, MagicMock]:
 @pytest.fixture
 def gi_patched(
     gi_mocks: dict[str, MagicMock],
+    tmp_path: Path,
 ) -> Generator[dict[str, MagicMock]]:
     """Patch gi libraries on the _tray module for the full test duration."""
+    icon_dir = tmp_path / "icons"
+    icon_dir.mkdir()
+    icon_result = (
+        icon_dir,
+        str(icon_dir / "bwssh-locked"),
+        str(icon_dir / "bwssh-unlocked"),
+        str(icon_dir / "bwssh-disconnected"),
+    )
     with (
         patch("bwssh.tray.TRAY_AVAILABLE", True),
         patch(
@@ -113,6 +122,7 @@ def gi_patched(
         patch("bwssh.tray.GLib", gi_mocks["GLib"], create=True),
         patch("bwssh.tray._NOTIFY_AVAILABLE", True),
         patch("bwssh.tray._Notify", gi_mocks["Notify"], create=True),
+        patch("bwssh.tray._create_icon_dir", return_value=icon_result),
     ):
         yield gi_mocks
 
@@ -253,7 +263,7 @@ class TestIconStateTransitions:
         tray._connected = False
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            "network-offline-symbolic", "bwssh: Daemon not running"
+            tray._icon_disconnected, "bwssh: Daemon not running"
         )
 
     def test_icon_locked(
@@ -265,7 +275,7 @@ class TestIconStateTransitions:
         tray._locked = True
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            "system-lock-screen-symbolic", "bwssh: Locked"
+            tray._icon_locked, "bwssh: Locked"
         )
 
     def test_icon_unlocked(
@@ -278,7 +288,7 @@ class TestIconStateTransitions:
         tray._key_count = 5
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            "security-high-symbolic", "bwssh: Unlocked (5 keys)"
+            tray._icon_unlocked, "bwssh: Unlocked (5 keys)"
         )
 
 
@@ -656,7 +666,18 @@ class TestNotifications:
         gi_patched: dict[str, MagicMock],
     ) -> None:
         """Notifications are silently skipped when libnotify is absent."""
-        with patch("bwssh.tray._NOTIFY_AVAILABLE", False):
+        icon_dir = tmp_path / "icons2"
+        icon_dir.mkdir()
+        icon_result = (
+            icon_dir,
+            str(icon_dir / "bwssh-locked"),
+            str(icon_dir / "bwssh-unlocked"),
+            str(icon_dir / "bwssh-disconnected"),
+        )
+        with (
+            patch("bwssh.tray._NOTIFY_AVAILABLE", False),
+            patch("bwssh.tray._create_icon_dir", return_value=icon_result),
+        ):
             t = TrayIcon(tmp_path / "control.sock")
 
         assert t._notifications_enabled is False
