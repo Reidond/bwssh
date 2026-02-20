@@ -474,9 +474,10 @@ def tray() -> None:
     from bwssh.tray import TRAY_AVAILABLE, TrayIcon  # noqa: PLC0415
 
     if not TRAY_AVAILABLE:
+        from bwssh.tray import _appindicator_install_hint  # noqa: PLC0415
+
         click.echo(
-            "Error: AppIndicator3 not available. "
-            "Install libayatana-appindicator3-1 or libappindicator-gtk3.",
+            "Error: " + _appindicator_install_hint(),
             err=True,
         )
         raise SystemExit(1)

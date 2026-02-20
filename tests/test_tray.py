@@ -17,7 +17,75 @@ from bwssh.cli import main as cli_main
 from bwssh.control import ControlError
 
 # The module must always be importable even when AppIndicator3 is missing.
-from bwssh.tray import TRAY_AVAILABLE, TrayIcon
+from bwssh.tray import TRAY_AVAILABLE, TrayIcon, _install_hint_for_os_release
+
+
+class TestAppIndicatorInstallHint:
+    """Verify distro-aware package install hints."""
+
+    # -- appindicator3 (default) ----------------------------------------
+
+    def test_fedora_appindicator(self) -> None:
+        hint = _install_hint_for_os_release('ID=fedora\nID_LIKE=""\n')
+        assert "dnf" in hint
+        assert "libayatana-appindicator-gtk3" in hint
+
+    def test_rhel_appindicator(self) -> None:
+        hint = _install_hint_for_os_release('ID=rhel\nID_LIKE="fedora"\n')
+        assert "dnf" in hint
+
+    def test_arch_appindicator(self) -> None:
+        hint = _install_hint_for_os_release("ID=arch\n")
+        assert "pacman" in hint
+        assert "libayatana-appindicator" in hint
+
+    def test_opensuse_appindicator(self) -> None:
+        os_release = 'ID=opensuse-tumbleweed\nID_LIKE="opensuse suse"\n'
+        hint = _install_hint_for_os_release(os_release)
+        assert "zypper" in hint
+
+    def test_debian_appindicator(self) -> None:
+        hint = _install_hint_for_os_release('ID=ubuntu\nID_LIKE="debian"\n')
+        assert "apt" in hint
+        assert "libayatana-appindicator3-1" in hint
+
+    def test_unknown_distro_falls_back_to_apt(self) -> None:
+        hint = _install_hint_for_os_release("")
+        assert "apt" in hint
+
+    def test_manjaro_uses_id_like(self) -> None:
+        hint = _install_hint_for_os_release('ID=manjaro\nID_LIKE="arch"\n')
+        assert "pacman" in hint
+
+    # -- gi (PyGObject missing) -----------------------------------------
+
+    def test_fedora_gi(self) -> None:
+        hint = _install_hint_for_os_release(
+            'ID=fedora\n', missing="gi"
+        )
+        assert "python3-gobject" in hint
+        assert "dnf" in hint
+
+    def test_debian_gi(self) -> None:
+        hint = _install_hint_for_os_release(
+            'ID=ubuntu\nID_LIKE="debian"\n', missing="gi"
+        )
+        assert "python3-gi" in hint
+
+    # -- gtk3 (GTK 3.0 typelib missing) ---------------------------------
+
+    def test_fedora_gtk3(self) -> None:
+        hint = _install_hint_for_os_release(
+            'ID=fedora\n', missing="gtk3"
+        )
+        assert "gtk3" in hint
+        assert "dnf" in hint
+
+    def test_debian_gtk3(self) -> None:
+        hint = _install_hint_for_os_release(
+            'ID=ubuntu\nID_LIKE="debian"\n', missing="gtk3"
+        )
+        assert "gir1.2-gtk-3.0" in hint
 
 
 class TestTrayAvailability:
