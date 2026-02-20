@@ -163,6 +163,54 @@ bwssh install --user-systemd   # Install systemd user service
 bwssh install --polkit         # Print polkit policy file
 ```
 
+## System Tray
+
+bwssh includes an optional system tray icon (`bwssh tray`) that shows agent
+status and provides quick lock/unlock controls. Install with the `gui` extra:
+
+```bash
+uv tool install bwssh[gui]
+```
+
+### Build dependencies
+
+PyGObject must be compiled from source, which requires system development
+packages.
+
+**Fedora / RHEL / CentOS:**
+
+```bash
+sudo dnf install gobject-introspection-devel cairo-gobject-devel python3-devel \
+    gtk3-devel libayatana-appindicator-gtk3
+```
+
+**Arch / Manjaro:**
+
+```bash
+sudo pacman -S gobject-introspection cairo python gtk3 libayatana-appindicator
+```
+
+**openSUSE:**
+
+```bash
+sudo zypper install gobject-introspection-devel cairo-devel python3-devel \
+    gtk3-devel typelib-1_0-AyatanaAppIndicator3-0_1
+```
+
+**Debian / Ubuntu:**
+
+```bash
+sudo apt install libgirepository1.0-dev libcairo2-dev python3-dev \
+    libgtk-3-dev libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1
+```
+
+Alternatively, skip building from source by using system-installed PyGObject:
+
+```bash
+sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3  # Fedora
+uv tool install --system-site-packages bwssh[gui]
+```
+
 ## Documentation
 
 Full documentation lives in `docs/` and can be served locally:
