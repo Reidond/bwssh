@@ -11,15 +11,23 @@ on:
           - patch
           - minor
           - major
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 jobs:
   ci:
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/ci.yml
 
   release:
     needs: ci
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' ||
+       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     environment:
       name: pypi
     permissions:
@@ -28,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -45,7 +55,7 @@ jobs:
       - name: Bump version
         id: version
         run: |
-          uv version --bump ${{ inputs.bump }}
+          uv version --bump ${{ inputs.bump || 'patch' }}
           VERSION=$(uv version --short)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
