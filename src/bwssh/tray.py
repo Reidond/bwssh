@@ -323,9 +323,7 @@ class TrayIcon:
 
         # Unlocked -> Locked
         if self._connected and prev_locked is False and self._locked is True:
-            self._send_notification(
-                "Vault Locked", "SSH keys cleared", _ICON_LOCKED
-            )
+            self._send_notification("Vault Locked", "SSH keys cleared", _ICON_LOCKED)
 
     def _send_notification(self, summary: str, body: str, icon: str) -> None:
         """Show a desktop notification via libnotify."""
