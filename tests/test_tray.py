@@ -169,12 +169,21 @@ def gi_patched(
     """Patch gi libraries on the _tray module for the full test duration."""
     icon_dir = tmp_path / "icons"
     icon_dir.mkdir()
-    icon_result = (
-        icon_dir,
-        str(icon_dir / "bwssh-locked"),
-        str(icon_dir / "bwssh-unlocked"),
-        str(icon_dir / "bwssh-disconnected"),
-    )
+    icon_sets = {
+        "dark": {
+            "locked": str(icon_dir / "bwssh-locked-dark"),
+            "unlocked": str(icon_dir / "bwssh-unlocked-dark"),
+            "disconnected": str(icon_dir / "bwssh-disconnected-dark"),
+        },
+        "light": {
+            "locked": str(icon_dir / "bwssh-locked-light"),
+            "unlocked": str(icon_dir / "bwssh-unlocked-light"),
+            "disconnected": str(icon_dir / "bwssh-disconnected-light"),
+        },
+    }
+    icon_result = (icon_dir, icon_sets)
+
+    gio = MagicMock()
     with (
         patch("bwssh.tray.TRAY_AVAILABLE", True),
         patch(
@@ -184,9 +193,12 @@ def gi_patched(
         ),
         patch("bwssh.tray.Gtk", gi_mocks["Gtk"], create=True),
         patch("bwssh.tray.GLib", gi_mocks["GLib"], create=True),
+        patch("bwssh.tray.Gio", gio, create=True),
         patch("bwssh.tray._NOTIFY_AVAILABLE", True),
         patch("bwssh.tray._Notify", gi_mocks["Notify"], create=True),
         patch("bwssh.tray._create_icon_dir", return_value=icon_result),
+        patch("bwssh.tray._read_portal_color_scheme", return_value=None),
+        patch("bwssh.tray._is_dark_from_gtk", return_value=False),
     ):
         yield gi_mocks
 
@@ -732,12 +744,19 @@ class TestNotifications:
         """Notifications are silently skipped when libnotify is absent."""
         icon_dir = tmp_path / "icons2"
         icon_dir.mkdir()
-        icon_result = (
-            icon_dir,
-            str(icon_dir / "bwssh-locked"),
-            str(icon_dir / "bwssh-unlocked"),
-            str(icon_dir / "bwssh-disconnected"),
-        )
+        icon_sets = {
+            "dark": {
+                "locked": str(icon_dir / "bwssh-locked-dark"),
+                "unlocked": str(icon_dir / "bwssh-unlocked-dark"),
+                "disconnected": str(icon_dir / "bwssh-disconnected-dark"),
+            },
+            "light": {
+                "locked": str(icon_dir / "bwssh-locked-light"),
+                "unlocked": str(icon_dir / "bwssh-unlocked-light"),
+                "disconnected": str(icon_dir / "bwssh-disconnected-light"),
+            },
+        }
+        icon_result = (icon_dir, icon_sets)
         with (
             patch("bwssh.tray._NOTIFY_AVAILABLE", False),
             patch("bwssh.tray._create_icon_dir", return_value=icon_result),
