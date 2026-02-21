@@ -17,7 +17,14 @@ from bwssh.cli import main as cli_main
 from bwssh.control import ControlError
 
 # The module must always be importable even when AppIndicator3 is missing.
-from bwssh.tray import TRAY_AVAILABLE, TrayIcon, _install_hint_for_os_release
+from bwssh.tray import (
+    _ICON_DISCONNECTED,
+    _ICON_LOCKED,
+    _ICON_UNLOCKED,
+    TRAY_AVAILABLE,
+    TrayIcon,
+    _install_hint_for_os_release,
+)
 
 
 class TestAppIndicatorInstallHint:
@@ -164,26 +171,8 @@ def gi_mocks() -> dict[str, MagicMock]:
 @pytest.fixture
 def gi_patched(
     gi_mocks: dict[str, MagicMock],
-    tmp_path: Path,
 ) -> Generator[dict[str, MagicMock]]:
     """Patch gi libraries on the _tray module for the full test duration."""
-    icon_dir = tmp_path / "icons"
-    icon_dir.mkdir()
-    icon_sets = {
-        "dark": {
-            "locked": str(icon_dir / "bwssh-locked-dark"),
-            "unlocked": str(icon_dir / "bwssh-unlocked-dark"),
-            "disconnected": str(icon_dir / "bwssh-disconnected-dark"),
-        },
-        "light": {
-            "locked": str(icon_dir / "bwssh-locked-light"),
-            "unlocked": str(icon_dir / "bwssh-unlocked-light"),
-            "disconnected": str(icon_dir / "bwssh-disconnected-light"),
-        },
-    }
-    icon_result = (icon_dir, icon_sets)
-
-    gio = MagicMock()
     with (
         patch("bwssh.tray.TRAY_AVAILABLE", True),
         patch(
@@ -193,12 +182,8 @@ def gi_patched(
         ),
         patch("bwssh.tray.Gtk", gi_mocks["Gtk"], create=True),
         patch("bwssh.tray.GLib", gi_mocks["GLib"], create=True),
-        patch("bwssh.tray.Gio", gio, create=True),
         patch("bwssh.tray._NOTIFY_AVAILABLE", True),
         patch("bwssh.tray._Notify", gi_mocks["Notify"], create=True),
-        patch("bwssh.tray._create_icon_dir", return_value=icon_result),
-        patch("bwssh.tray._read_portal_color_scheme", return_value=None),
-        patch("bwssh.tray._is_dark_from_gtk", return_value=False),
     ):
         yield gi_mocks
 
@@ -339,7 +324,7 @@ class TestIconStateTransitions:
         tray._connected = False
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            tray._icon_disconnected, "bwssh: Daemon not running"
+            _ICON_DISCONNECTED, "bwssh: Daemon not running"
         )
 
     def test_icon_locked(
@@ -351,7 +336,7 @@ class TestIconStateTransitions:
         tray._locked = True
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            tray._icon_locked, "bwssh: Locked"
+            _ICON_LOCKED, "bwssh: Locked"
         )
 
     def test_icon_unlocked(
@@ -364,7 +349,7 @@ class TestIconStateTransitions:
         tray._key_count = 5
         tray._update_icon()
         gi_patched["indicator"].set_icon_full.assert_called_with(
-            tray._icon_unlocked, "bwssh: Unlocked (5 keys)"
+            _ICON_UNLOCKED, "bwssh: Unlocked (5 keys)"
         )
 
 
@@ -742,25 +727,7 @@ class TestNotifications:
         gi_patched: dict[str, MagicMock],
     ) -> None:
         """Notifications are silently skipped when libnotify is absent."""
-        icon_dir = tmp_path / "icons2"
-        icon_dir.mkdir()
-        icon_sets = {
-            "dark": {
-                "locked": str(icon_dir / "bwssh-locked-dark"),
-                "unlocked": str(icon_dir / "bwssh-unlocked-dark"),
-                "disconnected": str(icon_dir / "bwssh-disconnected-dark"),
-            },
-            "light": {
-                "locked": str(icon_dir / "bwssh-locked-light"),
-                "unlocked": str(icon_dir / "bwssh-unlocked-light"),
-                "disconnected": str(icon_dir / "bwssh-disconnected-light"),
-            },
-        }
-        icon_result = (icon_dir, icon_sets)
-        with (
-            patch("bwssh.tray._NOTIFY_AVAILABLE", False),
-            patch("bwssh.tray._create_icon_dir", return_value=icon_result),
-        ):
+        with patch("bwssh.tray._NOTIFY_AVAILABLE", False):
             t = TrayIcon(tmp_path / "control.sock")
 
         assert t._notifications_enabled is False
