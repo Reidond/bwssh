@@ -2,7 +2,7 @@
 
 [project]
 name = "bwssh"
-version = "0.1.1"
+version = "0.1.2"
 description = "Bitwarden-backed SSH agent for Linux"
 readme = "README.md"
 requires-python = ">=3.12"
