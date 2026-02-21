@@ -26,37 +26,53 @@ logger = logging.getLogger(__name__)
 TRAY_AVAILABLE = False
 _NOTIFY_AVAILABLE = False
 
+# Tracks which dependency is missing so the CLI can show a precise hint.
+_TRAY_MISSING: str | None = None  # None = nothing missing, str = what failed
+
 try:
     import gi  # pyright: ignore[reportMissingImports]
+except ImportError:
+    _TRAY_MISSING = "gi"
+    logger.debug("PyGObject (gi) not importable")
 
-    # GTK 3.0 is required for AppIndicator3 menus.  If another module
-    # (e.g. _graphical.py) has already called require_version("Gtk", "4.0")
-    # in this process, requiring 3.0 will raise ValueError.  We catch that
-    # below, but to help users diagnose the problem we log it explicitly.
+if _TRAY_MISSING is None:
     try:
-        gi.require_version("Gtk", "3.0")
-    except ValueError:
-        raise ValueError(  # noqa: B904
-            "Gtk 3.0 cannot be loaded because Gtk 4.0 was already "
-            "required in this process.  Run 'bwssh tray' as a "
-            "separate command (not from a GTK-4 context)."
-        )
+        # GTK 3.0 is required for AppIndicator3 menus.  If another module
+        # (e.g. _graphical.py) has already called require_version("Gtk", "4.0")
+        # in this process, requiring 3.0 will raise ValueError.
+        try:
+            gi.require_version("Gtk", "3.0")
+        except ValueError:
+            raise ValueError(  # noqa: B904
+                "Gtk 3.0 cannot be loaded because Gtk 4.0 was already "
+                "required in this process.  Run 'bwssh tray' as a "
+                "separate command (not from a GTK-4 context)."
+            )
 
+        from gi.repository import GLib, Gtk  # pyright: ignore[reportMissingImports]
+    except (ImportError, ValueError) as _exc:
+        _TRAY_MISSING = "gtk3"
+        logger.debug("GTK 3.0 not available: %s", _exc)
+
+if _TRAY_MISSING is None:
     try:
-        gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import (  # pyright: ignore[reportMissingImports]
-            AyatanaAppIndicator3 as AppIndicator3,
-        )
-    except ValueError:
-        gi.require_version("AppIndicator3", "0.1")
-        from gi.repository import (  # pyright: ignore[reportMissingImports]
-            AppIndicator3,
-        )
+        try:
+            gi.require_version("AyatanaAppIndicator3", "0.1")
+            from gi.repository import (  # pyright: ignore[reportMissingImports]
+                AyatanaAppIndicator3 as AppIndicator3,
+            )
+        except ValueError:
+            gi.require_version("AppIndicator3", "0.1")
+            from gi.repository import (  # pyright: ignore[reportMissingImports]
+                AppIndicator3,
+            )
 
-    from gi.repository import GLib, Gtk  # pyright: ignore[reportMissingImports]
+        TRAY_AVAILABLE = True
+    except (ImportError, ValueError) as _exc:
+        _TRAY_MISSING = "appindicator3"
+        logger.debug("AppIndicator3 not available: %s", _exc)
 
-    TRAY_AVAILABLE = True
-
+if TRAY_AVAILABLE:
     # Desktop notifications (optional; tray works without them).
     try:
         gi.require_version("Notify", "0.7")
@@ -67,8 +83,88 @@ try:
         _NOTIFY_AVAILABLE = True
     except (ImportError, ValueError):
         logger.debug("libnotify not available; notifications disabled")
-except (ImportError, ValueError) as _exc:
-    logger.debug("AppIndicator3 not available: %s", _exc)
+
+
+def _parse_distro_ids(os_release: str) -> set[str]:
+    """Extract distro IDs from os-release content."""
+    id_line = ""
+    id_like_line = ""
+    for line in os_release.splitlines():
+        if line.startswith("ID="):
+            id_line = line.split("=", 1)[1].strip().strip('"')
+        elif line.startswith("ID_LIKE="):
+            id_like_line = line.split("=", 1)[1].strip().strip('"')
+    return {id_line} | set(id_like_line.split())
+
+
+def _install_hint_for_os_release(
+    os_release: str,
+    missing: str = "appindicator3",
+) -> str:
+    """Return a distro-specific install hint based on what is missing.
+
+    *missing* is one of ``"gi"``, ``"gtk3"``, or ``"appindicator3"``.
+    """
+    distro_ids = _parse_distro_ids(os_release)
+
+    if missing == "gi":
+        return _gi_hint(distro_ids)
+    if missing == "gtk3":
+        return _gtk3_hint(distro_ids)
+    return _appindicator3_hint(distro_ids)
+
+
+def _gi_hint(distro_ids: set[str]) -> str:
+    """Hint for missing PyGObject (``import gi`` fails)."""
+    if distro_ids & {"fedora", "rhel", "centos"}:
+        return "sudo dnf install python3-gobject"
+    if distro_ids & {"arch", "manjaro", "endeavouros"}:
+        return "sudo pacman -S python-gobject"
+    if distro_ids & {"opensuse", "suse", "sles"}:
+        return "sudo zypper install python3-gobject"
+    return "sudo apt install python3-gi"
+
+
+def _gtk3_hint(distro_ids: set[str]) -> str:
+    """Hint for missing GTK 3.0 typelib."""
+    if distro_ids & {"fedora", "rhel", "centos"}:
+        return "sudo dnf install gtk3"
+    if distro_ids & {"arch", "manjaro", "endeavouros"}:
+        return "sudo pacman -S gtk3"
+    if distro_ids & {"opensuse", "suse", "sles"}:
+        return "sudo zypper install gtk3"
+    return "sudo apt install gir1.2-gtk-3.0"
+
+
+def _appindicator3_hint(distro_ids: set[str]) -> str:
+    """Hint for missing AppIndicator3 typelib."""
+    if distro_ids & {"fedora", "rhel", "centos"}:
+        return "sudo dnf install libayatana-appindicator-gtk3"
+    if distro_ids & {"arch", "manjaro", "endeavouros"}:
+        return "sudo pacman -S libayatana-appindicator"
+    if distro_ids & {"opensuse", "suse", "sles"}:
+        return "sudo zypper install typelib-1_0-AyatanaAppIndicator3-0_1"
+    return "sudo apt install libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1"
+
+
+_MISSING_LABELS = {
+    "gi": "PyGObject is not installed",
+    "gtk3": "GTK 3.0 typelib is not available",
+    "appindicator3": "AppIndicator3 typelib is not available",
+}
+
+
+def _appindicator_install_hint() -> str:
+    """Return a distro-aware install hint for the first missing dependency."""
+    missing = _TRAY_MISSING or "appindicator3"
+    try:
+        os_release = Path("/etc/os-release").read_text()
+    except OSError:
+        os_release = ""
+    label = _MISSING_LABELS[missing]
+    command = _install_hint_for_os_release(os_release, missing)
+    return f"{label}.\n  {command}"
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -163,8 +259,7 @@ class TrayIcon:
     def __init__(self, socket_path: Path) -> None:
         if not TRAY_AVAILABLE:
             raise RuntimeError(
-                "AppIndicator3 is not available. "
-                "Install libayatana-appindicator3-1 or libappindicator-gtk3."
+                "AppIndicator3 is not available. " + _appindicator_install_hint()
             )
 
         self._socket_path = socket_path
