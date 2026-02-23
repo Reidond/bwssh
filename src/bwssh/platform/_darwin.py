@@ -183,7 +183,7 @@ def _read_start_time(pid: int) -> int | None:  # noqa: PLR0911
         tv_sec, tv_usec = struct.unpack("qq", buf.raw[128:144])
         if tv_sec <= 0:
             return None
-        return tv_sec * 1_000_000 + tv_usec
+        return int(tv_sec * 1_000_000 + tv_usec)
     except (OSError, ValueError, struct.error):
         return None
 
@@ -240,12 +240,12 @@ async def create_sleep_watcher(
     via pyobjc. Falls back to no-op if pyobjc is not installed.
     """
     try:
-        from AppKit import NSWorkspace  # type: ignore[import-not-found]  # noqa: PLC0415, I001
+        from AppKit import NSWorkspace  # noqa: PLC0415, I001
 
         workspace = NSWorkspace.sharedWorkspace()
         center = workspace.notificationCenter()
 
-        class SleepObserver:  # type: ignore[type-arg]
+        class SleepObserver:
             def handleSleepNotification_(self, _notification: object) -> None:
                 logger.info("System going to sleep, locking agent")
                 control_server.lock()
