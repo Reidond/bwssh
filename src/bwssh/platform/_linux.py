@@ -126,8 +126,7 @@ async def create_authorizer(
 
     if not require_polkit:
         logger.info(
-            "Polkit disabled (require_polkit=false); "
-            "signing allowed without prompts."
+            "Polkit disabled (require_polkit=false); signing allowed without prompts."
         )
         return MockPolkitAuthorizer(always_allow=True), False, None
 

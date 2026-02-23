@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["PyGObject>=3.42.0,<3.50"]
-macos-sleep = ["pyobjc-framework-Cocoa>=10.0"]
+macos-sleep = ["pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'"]
 
 [project.scripts]
 bwssh = "bwssh.cli:main"

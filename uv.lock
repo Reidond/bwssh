@@ -18,7 +18,7 @@ gui = [
     { name = "pygobject" },
 ]
 macos-sleep = [
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
 ]
 
 [package.dev-dependencies]
@@ -36,7 +36,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0.4" },
     { name = "dbus-fast", marker = "sys_platform == 'linux'", specifier = ">=4.0.0" },
     { name = "pygobject", marker = "extra == 'gui'", specifier = ">=3.42.0,<3.50" },
-    { name = "pyobjc-framework-cocoa", marker = "extra == 'macos-sleep'", specifier = ">=10.0" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' and extra == 'macos-sleep'", specifier = ">=10.0" },
     { name = "textual", specifier = ">=7.5.0" },
 ]
 provides-extras = ["gui", "macos-sleep"]

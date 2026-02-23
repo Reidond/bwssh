@@ -226,9 +226,7 @@ async def create_authorizer(
             "Falling back to socket-permission-based authorization."
         )
 
-    logger.info(
-        "macOS: authorization via socket permissions (polkit not available)"
-    )
+    logger.info("macOS: authorization via socket permissions (polkit not available)")
     return MockPolkitAuthorizer(always_allow=True), False, None
 
 
@@ -314,6 +312,5 @@ def try_service_stop() -> bool:
 def _launchd_plist_path() -> Path:
     """Return path to the launchd plist for the agent."""
     return (
-        Path.home() / "Library" / "LaunchAgents"
-        / "io.github.reidond.bwssh-agent.plist"
+        Path.home() / "Library" / "LaunchAgents" / "io.github.reidond.bwssh-agent.plist"
     )
