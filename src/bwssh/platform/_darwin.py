@@ -240,7 +240,7 @@ async def create_sleep_watcher(
     via pyobjc. Falls back to no-op if pyobjc is not installed.
     """
     try:
-        from AppKit import NSWorkspace  # noqa: PLC0415, I001
+        from AppKit import NSWorkspace  # noqa: PLC0415
 
         workspace = NSWorkspace.sharedWorkspace()
         center = workspace.notificationCenter()
