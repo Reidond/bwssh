@@ -12,9 +12,6 @@ import struct
 import sys
 from pathlib import Path
 
-from dbus_fast import BusType
-from dbus_fast.aio import MessageBus
-
 from bwssh.agent_proto import (
     pack_string,
     pack_uint32,
@@ -43,12 +40,12 @@ from bwssh.keys import (
 )
 from bwssh.logging_config import setup_logging
 from bwssh.peercred import ConnectionContext, build_connection_context
+from bwssh.platform import create_authorizer
 from bwssh.polkit import (
     ACTION_SIGN,
     Authorizer,
     CachingAuthorizer,
     MockPolkitAuthorizer,
-    PolkitAuthorizer,
     build_details,
 )
 from bwssh.signing import build_signature_blob, sign_data
@@ -59,10 +56,9 @@ _SOCKET_NAME = "agent.sock"
 
 
 def _default_runtime_dir() -> Path:
-    xdg = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg:
-        return Path(xdg) / "bwssh"
-    return Path(f"/tmp/bwssh-{os.getuid()}")
+    from bwssh.platform import get_runtime_dir  # noqa: PLC0415
+
+    return get_runtime_dir()
 
 
 class AgentServer:
@@ -248,36 +244,14 @@ class AgentServer:
 async def _sleep_watcher(
     control_server: ControlServer, shutdown_event: asyncio.Event
 ) -> None:
-    """Watch for system sleep events and lock the agent."""
-    try:
-        bus = MessageBus(bus_type=BusType.SYSTEM)
-        await asyncio.wait_for(bus.connect(), timeout=5.0)
+    """Watch for system sleep events and lock the agent.
 
-        # Subscribe to PrepareForSleep signal from logind
-        introspection = await asyncio.wait_for(
-            bus.introspect("org.freedesktop.login1", "/org/freedesktop/login1"),
-            timeout=5.0,
-        )
-        proxy = bus.get_proxy_object(
-            "org.freedesktop.login1", "/org/freedesktop/login1", introspection
-        )
-        manager = proxy.get_interface("org.freedesktop.login1.Manager")
+    Delegates to the platform-specific sleep watcher implementation
+    (logind on Linux, NSWorkspace on macOS).
+    """
+    from bwssh.platform import create_sleep_watcher  # noqa: PLC0415
 
-        def on_prepare_for_sleep(going_to_sleep: bool) -> None:
-            if going_to_sleep:
-                logger.info("System going to sleep, locking agent")
-                control_server.lock()
-
-        manager.on_prepare_for_sleep(on_prepare_for_sleep)  # type: ignore[attr-defined]
-        logger.info("Sleep watcher active: will lock on system sleep")
-
-        # Wait until shutdown
-        await shutdown_event.wait()
-
-    except TimeoutError:
-        logger.info("Sleep watcher: D-Bus connection timed out (logind unavailable)")
-    except Exception:
-        logger.debug("Sleep watcher setup failed (non-critical)", exc_info=True)
+    await create_sleep_watcher(control_server, shutdown_event)
 
 
 async def _main_async(
@@ -348,30 +322,9 @@ def main_entry() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def _connect_polkit() -> tuple[Authorizer, bool, str | None]:
-        """Connect to system D-Bus for polkit authorization."""
-        if not config.auth.require_polkit:
-            logger.info(
-                "Polkit disabled (require_polkit=false); "
-                "signing allowed without prompts."
-            )
-            return MockPolkitAuthorizer(always_allow=True), False, None
-
-        try:
-            bus = MessageBus(bus_type=BusType.SYSTEM)
-            await bus.connect()
-            return PolkitAuthorizer(bus), True, None
-        except Exception as e:
-            logger.warning(
-                "Failed to connect to system D-Bus for polkit; "
-                "sign requests will be denied. Run 'bwssh status' for details.",
-                exc_info=True,
-            )
-            return MockPolkitAuthorizer(always_allow=False), False, str(e)
-
     bw_provider = BitwardenProvider(config.bitwarden.bw_path, config.bitwarden.item_ids)
     polkit_auth, polkit_available, polkit_error = loop.run_until_complete(
-        _connect_polkit()
+        create_authorizer(config)
     )
 
     caching_auth = CachingAuthorizer(

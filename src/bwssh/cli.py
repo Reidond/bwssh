@@ -32,11 +32,12 @@ def _read_package_data(path: str) -> str:
 
 
 def _get_control_socket() -> Path:
+    from bwssh.platform import get_runtime_dir  # noqa: PLC0415
+
     config = load_config()
     if config.daemon.runtime_dir is not None:
         return config.daemon.runtime_dir / config.daemon.control_socket
-    xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-    return Path(xdg) / "bwssh" / config.daemon.control_socket
+    return get_runtime_dir() / config.daemon.control_socket
 
 
 def _send_command(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -57,17 +58,9 @@ def _format_uptime(seconds: float) -> str:
 
 
 def _try_systemd_start() -> bool:
-    if shutil.which("systemctl") is None:
-        return False
-    try:
-        subprocess.run(
-            ["systemctl", "--user", "start", "bwssh-agent.service"],
-            check=True,
-            capture_output=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-    return True
+    from bwssh.platform import try_service_start  # noqa: PLC0415
+
+    return try_service_start()
 
 
 def _start_daemon_direct() -> bool:
@@ -89,17 +82,9 @@ def _start_daemon_direct() -> bool:
 
 
 def _try_systemd_stop() -> bool:
-    if shutil.which("systemctl") is None:
-        return False
-    try:
-        subprocess.run(
-            ["systemctl", "--user", "stop", "bwssh-agent.service"],
-            check=True,
-            capture_output=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-    return True
+    from bwssh.platform import try_service_stop  # noqa: PLC0415
+
+    return try_service_stop()
 
 
 def _stop_daemon_direct() -> bool:
@@ -212,7 +197,7 @@ def _handle_control_error(_e: ControlError | OSError) -> None:
 @click.version_option(version=__version__, prog_name="bwssh")
 @click.pass_context
 def main(ctx: click.Context) -> None:
-    """Bitwarden-backed SSH agent for Linux."""
+    """Bitwarden-backed SSH agent."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -296,22 +281,25 @@ def _xdg_autostart_dir() -> Path:
 
 
 @main.command()
-@click.option("--user-systemd", is_flag=True, help="Install systemd user units")
-@click.option("--polkit", is_flag=True, help="Print polkit policy file")
+@click.option("--user-systemd", is_flag=True, help="Install systemd user units (Linux)")
+@click.option("--launchd", is_flag=True, help="Install launchd user agent (macOS)")
+@click.option("--polkit", is_flag=True, help="Print polkit policy file (Linux)")
 @click.option(
     "--tray-autostart",
     is_flag=True,
-    help="Install XDG autostart entry for the tray icon",
+    help="Install XDG autostart entry for the tray icon (Linux)",
 )
-def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
-    """Install systemd units, polkit policy, or tray autostart.
+def install(
+    user_systemd: bool, launchd: bool, polkit: bool, tray_autostart: bool
+) -> None:
+    """Install service integration (systemd/launchd), polkit policy, or tray autostart.
 
     Flags can be combined, e.g.
     ``bwssh install --user-systemd --tray-autostart``.
     """
-    if not (user_systemd or polkit or tray_autostart):
+    if not (user_systemd or launchd or polkit or tray_autostart):
         click.echo(
-            "Error: specify --user-systemd, --polkit, or --tray-autostart",
+            "Error: specify --user-systemd, --launchd, --polkit, or --tray-autostart",
             err=True,
         )
         raise SystemExit(1)
@@ -344,6 +332,9 @@ def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
             "systemctl --user enable bwssh-agent.socket bwssh-tray.service"
         )
 
+    if launchd:
+        _install_launchd()
+
     if polkit:
         click.echo(_read_package_data("polkit/io.github.reidond.bwssh.policy"))
         # Print instructions to stderr so they don't pollute piped output
@@ -366,6 +357,24 @@ def install(user_systemd: bool, polkit: bool, tray_autostart: bool) -> None:
         desktop_path.write_text(desktop_template.format(exe_path=bwssh_path))
         click.echo(f"Installed XDG autostart entry: {desktop_path}")
         click.echo("The tray will start automatically on next login.")
+
+
+def _install_launchd() -> None:
+    """Install launchd user agent plist for macOS."""
+    agentd_path = shutil.which("bwssh-agentd") or "bwssh-agentd"
+    env_path = _runtime_env_path()
+
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True, exist_ok=True)
+
+    plist_template = _read_package_data("launchd/io.github.reidond.bwssh-agent.plist")
+    plist_path = launch_agents / "io.github.reidond.bwssh-agent.plist"
+    plist_path.write_text(
+        plist_template.format(exe_path=agentd_path, env_path=env_path)
+    )
+
+    click.echo(f"Installed launchd agent to {plist_path}")
+    click.echo("Run: launchctl load " + str(plist_path))
 
 
 @main.command()
@@ -451,8 +460,9 @@ def sync() -> None:
 
 def _tray_lock_path() -> Path:
     """Return the path used for tray single-instance locking."""
-    xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-    lock_dir = Path(xdg) / "bwssh"
+    from bwssh.platform import get_runtime_dir  # noqa: PLC0415
+
+    lock_dir = get_runtime_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / "tray.lock"
 
