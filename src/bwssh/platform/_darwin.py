@@ -189,11 +189,13 @@ def _read_start_time(pid: int) -> int | None:  # noqa: PLR0911
 
 
 def get_runtime_dir() -> Path:
-    """Return the runtime directory for bwssh on macOS."""
-    tmpdir = os.environ.get("TMPDIR")
-    if tmpdir:
-        return Path(tmpdir) / "bwssh"
-    return Path(f"/tmp/bwssh-{os.getuid()}")
+    """Return the runtime directory for bwssh on macOS.
+
+    Uses ~/Library/Caches/bwssh which is stable across reboots, unlike
+    $TMPDIR (/var/folders/…/T/) whose path changes after each reboot.
+    This is the macOS equivalent of Linux's $XDG_RUNTIME_DIR.
+    """
+    return Path.home() / "Library" / "Caches" / "bwssh"
 
 
 def get_config_dir() -> Path:

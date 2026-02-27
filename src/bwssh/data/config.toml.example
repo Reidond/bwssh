@@ -3,7 +3,8 @@
 
 [daemon]
 # Runtime directory for sockets and PID file.
-# Default: $XDG_RUNTIME_DIR/bwssh (or /tmp/bwssh-$UID if XDG_RUNTIME_DIR not set)
+# Linux default: $XDG_RUNTIME_DIR/bwssh (or /tmp/bwssh-$UID if XDG_RUNTIME_DIR not set)
+# macOS default: ~/Library/Caches/bwssh
 # runtime_dir = "/run/user/1000/bwssh"
 
 # Socket file names (relative to runtime_dir)
