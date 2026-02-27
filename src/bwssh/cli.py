@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from importlib.resources import files
 from pathlib import Path
@@ -294,15 +295,18 @@ def install(
 ) -> None:
     """Install service integration (systemd/launchd), polkit policy, or tray autostart.
 
+    When no flags are given, auto-detects the platform:
+    - macOS: installs launchd agent
+    - Linux: installs systemd user units
+
     Flags can be combined, e.g.
     ``bwssh install --user-systemd --tray-autostart``.
     """
     if not (user_systemd or launchd or polkit or tray_autostart):
-        click.echo(
-            "Error: specify --user-systemd, --launchd, --polkit, or --tray-autostart",
-            err=True,
-        )
-        raise SystemExit(1)
+        if sys.platform == "darwin":
+            launchd = True
+        else:
+            user_systemd = True
 
     if user_systemd:
         target = _systemd_user_dir()

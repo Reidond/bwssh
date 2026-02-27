@@ -168,9 +168,23 @@ class TestStopCommand:
 
 
 class TestInstallCommand:
-    def test_install_no_flags(self, runner: CliRunner) -> None:
-        result = runner.invoke(main, ["install"])
-        assert result.exit_code != 0
+    def test_install_no_flags_auto_detects_platform(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Running 'bwssh install' with no flags auto-detects the platform."""
+        target = tmp_path / "systemd" / "user"
+        with (
+            patch("bwssh.cli.sys") as mock_sys,
+            patch("bwssh.cli._systemd_user_dir", return_value=target),
+            patch(
+                "bwssh.cli._runtime_env_path",
+                return_value="/usr/bin:/bin",
+            ),
+        ):
+            mock_sys.platform = "linux"
+            result = runner.invoke(main, ["install"])
+        assert result.exit_code == 0
+        assert (target / "bwssh-agent.service").exists()
 
     def test_install_user_systemd(self, runner: CliRunner, tmp_path: Path) -> None:
         target = tmp_path / "systemd" / "user"

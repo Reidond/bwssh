@@ -11,9 +11,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Protocol
 
-import dbus_fast
-
 if TYPE_CHECKING:
+    import dbus_fast
     from dbus_fast.aio import MessageBus
 
     from bwssh.peercred import ConnectionContext
@@ -82,6 +81,8 @@ class PolkitAuthorizer:
         details: dict[str, str],  # noqa: ARG002
     ) -> bool:
         try:
+            import dbus_fast as _dbus_fast  # noqa: PLC0415
+
             introspection = await self._bus.introspect(
                 _POLKIT_BUS_NAME, _POLKIT_OBJECT_PATH
             )
@@ -93,8 +94,8 @@ class PolkitAuthorizer:
             subject = (
                 "unix-process",
                 {
-                    "pid": dbus_fast.Variant("u", connection_ctx.peer_pid),
-                    "start-time": dbus_fast.Variant(
+                    "pid": _dbus_fast.Variant("u", connection_ctx.peer_pid),
+                    "start-time": _dbus_fast.Variant(
                         "t", connection_ctx.peer_start_time or 0
                     ),
                 },
