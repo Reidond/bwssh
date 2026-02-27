@@ -861,9 +861,16 @@ class TestInstallTrayAutostart:
         # XDG autostart installed
         assert (autostart_dir / "bwssh-tray.desktop").exists()
 
-    def test_error_without_flags(self) -> None:
+    def test_no_flags_auto_detects_platform(self, tmp_path: Path) -> None:
         runner = CliRunner()
-        result = runner.invoke(cli_main, ["install"])
+        systemd_dir = tmp_path / "systemd" / "user"
+        with (
+            patch("bwssh.cli.sys") as mock_sys,
+            patch("bwssh.cli._systemd_user_dir", return_value=systemd_dir),
+            patch("bwssh.cli._runtime_env_path", return_value="/usr/bin:/bin"),
+        ):
+            mock_sys.platform = "linux"
+            result = runner.invoke(cli_main, ["install"])
 
-        assert result.exit_code == 1
-        assert "--tray-autostart" in result.output
+        assert result.exit_code == 0
+        assert (systemd_dir / "bwssh-agent.service").exists()
