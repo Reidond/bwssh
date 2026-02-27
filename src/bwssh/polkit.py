@@ -12,7 +12,6 @@ import time
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    import dbus_fast
     from dbus_fast.aio import MessageBus
 
     from bwssh.peercred import ConnectionContext
