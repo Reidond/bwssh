@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 from datetime import UTC
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -22,7 +23,6 @@ from bwssh.peercred import (
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from pathlib import Path
 
 
 class TestPlatformImport:
@@ -140,12 +140,11 @@ class TestLinuxBackend:
 class TestDarwinBackend:
     """Tests that verify the macOS platform backend works correctly."""
 
-    def test_runtime_dir_uses_tmpdir(self) -> None:
+    def test_runtime_dir_uses_library_caches(self) -> None:
         from bwssh.platform._darwin import get_runtime_dir  # noqa: PLC0415
 
-        with patch.dict(os.environ, {"TMPDIR": "/var/folders/xx/tmp"}):
-            result = get_runtime_dir()
-        assert str(result) == "/var/folders/xx/tmp/bwssh"
+        result = get_runtime_dir()
+        assert str(result) == str(Path.home() / "Library" / "Caches" / "bwssh")
 
     def test_config_dir(self) -> None:
         from bwssh.platform._darwin import get_config_dir  # noqa: PLC0415
