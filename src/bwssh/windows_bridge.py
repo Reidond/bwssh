@@ -46,8 +46,10 @@ class WindowsAgentBridge:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        assert proc.stdin is not None
-        assert proc.stdout is not None
+        relay_stdin = proc.stdin
+        relay_stdout = proc.stdout
+        assert relay_stdin is not None
+        assert relay_stdout is not None
 
         async def _client_to_relay() -> None:
             try:
@@ -55,17 +57,17 @@ class WindowsAgentBridge:
                     chunk = await reader.read(65536)
                     if not chunk:
                         break
-                    proc.stdin.write(chunk)
-                    await proc.stdin.drain()
+                    relay_stdin.write(chunk)
+                    await relay_stdin.drain()
             finally:
                 with contextlib.suppress(BrokenPipeError):
-                    proc.stdin.close()
+                    relay_stdin.close()
                 with contextlib.suppress(Exception):
-                    await proc.stdin.wait_closed()
+                    await relay_stdin.wait_closed()
 
         async def _relay_to_client() -> None:
             while True:
-                chunk = await proc.stdout.read(65536)
+                chunk = await relay_stdout.read(65536)
                 if not chunk:
                     break
                 writer.write(chunk)
@@ -127,21 +129,23 @@ class WindowsAgentBridge:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        assert proc.stdin is not None
-        assert proc.stdout is not None
+        relay_stdin = proc.stdin
+        relay_stdout = proc.stdout
+        assert relay_stdin is not None
+        assert relay_stdout is not None
 
-        proc.stdin.write(frame)
-        await proc.stdin.drain()
-        proc.stdin.close()
+        relay_stdin.write(frame)
+        await relay_stdin.drain()
+        relay_stdin.close()
         with contextlib.suppress(Exception):
-            await proc.stdin.wait_closed()
+            await relay_stdin.wait_closed()
 
         raw_len = await asyncio.wait_for(
-            proc.stdout.readexactly(4), timeout=self._timeout_seconds
+            relay_stdout.readexactly(4), timeout=self._timeout_seconds
         )
         resp_len = int.from_bytes(raw_len, "big")
         raw_body = await asyncio.wait_for(
-            proc.stdout.readexactly(resp_len), timeout=self._timeout_seconds
+            relay_stdout.readexactly(resp_len), timeout=self._timeout_seconds
         )
         msg = raw_body[0]
         body = raw_body[1:]
@@ -158,6 +162,7 @@ class WindowsAgentBridge:
     def _algorithm_from_blob(self, blob: bytes) -> str:
         try:
             algorithm, _ = unpack_string(blob, 0)
-            return algorithm.decode("utf-8", errors="replace")
+            algorithm_bytes = bytes(algorithm)
+            return algorithm_bytes.decode("utf-8", errors="replace")
         except Exception:
             return "unknown"
