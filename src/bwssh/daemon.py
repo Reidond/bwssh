@@ -49,6 +49,7 @@ from bwssh.polkit import (
     build_details,
 )
 from bwssh.signing import build_signature_blob, sign_data
+from bwssh.windows_bridge import WindowsAgentBridge
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class AgentServer:
         polkit: Authorizer | None = None,
         config: BwsshConfig | None = None,
         bitwarden: BitwardenLike | None = None,
+        windows_bridge: WindowsAgentBridge | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir or _default_runtime_dir()
         self._socket_path = self._runtime_dir / _SOCKET_NAME
@@ -77,6 +79,7 @@ class AgentServer:
         self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
         self._config = config or BwsshConfig()
         self._bitwarden = bitwarden
+        self._windows_bridge = windows_bridge
 
     @property
     def socket_path(self) -> Path:
@@ -123,6 +126,10 @@ class AgentServer:
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        if self._windows_bridge is not None:
+            await self._windows_bridge.proxy_client(reader, writer)
+            return
+
         sock = writer.get_extra_info("socket")
         _conn_ctx = None
         if sock is not None:
@@ -258,6 +265,7 @@ async def _main_async(
     agent_server: AgentServer,
     control_server: ControlServer,
     lock_on_sleep: bool = False,
+    auto_unlock_poll_seconds: int | None = None,
 ) -> None:
     shutdown_event = asyncio.Event()
 
@@ -272,6 +280,14 @@ async def _main_async(
     if lock_on_sleep:
         tasks.append(
             asyncio.create_task(_sleep_watcher(control_server, shutdown_event))
+        )
+    if auto_unlock_poll_seconds:
+        tasks.append(
+            asyncio.create_task(
+                control_server.auto_unlock_watcher(
+                    shutdown_event, auto_unlock_poll_seconds
+                )
+            )
         )
 
     await asyncio.gather(*tasks)
@@ -322,7 +338,14 @@ def main_entry() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    bw_provider = BitwardenProvider(config.bitwarden.bw_path, config.bitwarden.item_ids)
+    bridge: WindowsAgentBridge | None = None
+    bw_provider: BitwardenLike | None = None
+    if config.bitwarden.mode == "windows_bridge":
+        bridge = WindowsAgentBridge(config.bitwarden.windows_pipe_command)
+    else:
+        bw_provider = BitwardenProvider(
+            config.bitwarden.bw_path, config.bitwarden.item_ids
+        )
     polkit_auth, polkit_available, polkit_error = loop.run_until_complete(
         create_authorizer(config)
     )
@@ -336,6 +359,7 @@ def main_entry() -> None:
         polkit=caching_auth,
         config=config,
         bitwarden=bw_provider,
+        windows_bridge=bridge,
     )
     control_server = ControlServer(
         runtime_dir=runtime_dir,
@@ -345,6 +369,7 @@ def main_entry() -> None:
         polkit_available=polkit_available,
         polkit_error=polkit_error,
         polkit=caching_auth,
+        windows_bridge=bridge,
     )
 
     def _shutdown_handler() -> None:
@@ -357,7 +382,12 @@ def main_entry() -> None:
 
     try:
         loop.run_until_complete(
-            _main_async(agent_server, control_server, config.daemon.lock_on_sleep)
+            _main_async(
+                agent_server,
+                control_server,
+                config.daemon.lock_on_sleep,
+                config.bitwarden.auto_unlock_poll_seconds,
+            )
         )
     finally:
         loop.close()

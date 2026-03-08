@@ -31,6 +31,15 @@ class BitwardenConfig:
     bw_path: str = "bw"
     mode: str = "explicit"
     item_ids: list[str] = field(default_factory=list)
+    windows_pipe_command: list[str] = field(
+        default_factory=lambda: [
+            "npiperelay.exe",
+            "-ei",
+            "-s",
+            "//./pipe/openssh-ssh-agent",
+        ]
+    )
+    auto_unlock_poll_seconds: int = 5
 
 
 @dataclass
@@ -123,6 +132,14 @@ def load_config(path: Path | None = None) -> BwsshConfig:
                 bw_path=bw_data.get("bw_path", config.bitwarden.bw_path),
                 mode=bw_data.get("mode", config.bitwarden.mode),
                 item_ids=bw_data.get("item_ids", config.bitwarden.item_ids),
+                windows_pipe_command=bw_data.get(
+                    "windows_pipe_command",
+                    config.bitwarden.windows_pipe_command,
+                ),
+                auto_unlock_poll_seconds=bw_data.get(
+                    "auto_unlock_poll_seconds",
+                    config.bitwarden.auto_unlock_poll_seconds,
+                ),
             )
 
         # Parse auth section

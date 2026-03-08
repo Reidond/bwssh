@@ -218,6 +218,7 @@ def status() -> None:
     locked = result.get("locked", False)
     polkit_available = result.get("polkit_available", True)
     polkit_error = result.get("polkit_error")
+    mode = result.get("mode", "explicit")
 
     state = (
         click.style("locked", fg="red")
@@ -236,6 +237,7 @@ def status() -> None:
     click.echo(f"Keys loaded: {key_count}")
     click.echo(f"State:       {state}")
     click.echo(f"Polkit:      {polkit_status}")
+    click.echo(f"Mode:        {mode}")
 
     if polkit_error:
         click.echo()
@@ -401,6 +403,23 @@ def unlock(session_key: str | None, ui_mode: str | None) -> None:
     Prompts for your Bitwarden master password, then loads SSH keys
     from your vault into the agent.
     """
+    config = load_config()
+    if config.bitwarden.mode == "windows_bridge":
+        try:
+            result = _send_command("unlock")
+        except (ControlError, OSError) as e:
+            _handle_control_error(e)
+            return
+
+        message = result.get("message")
+        if message:
+            click.echo(str(message))
+        if result.get("unlocked"):
+            click.echo(
+                f"Windows bridge ready. {result.get('key_count', 0)} key(s) available."
+            )
+        return
+
     # Check for BW_SESSION env var if no --session provided
     if session_key is None:
         session_key = _get_bw_session_from_env()
@@ -450,6 +469,9 @@ def sync() -> None:
     """
     try:
         result = _send_command("sync")
+        message = result.get("message")
+        if message:
+            click.echo(str(message))
         key_count = result.get("key_count", 0)
         click.echo(f"Sync complete. {key_count} key(s) loaded.")
     except ControlError as e:

@@ -26,6 +26,7 @@ from bwssh.keys import (
     get_public_key_blob,
     load_private_key,
 )
+from bwssh.windows_bridge import BridgeIdentity
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -496,6 +497,46 @@ class TestUnlockMethod:
             server.shutdown()
             await task
 
+    @pytest.mark.asyncio
+    async def test_unlock_windows_bridge_mode(
+        self,
+        runtime_dir: Path,
+        control_socket_path: Path,
+        config: BwsshConfig,
+    ) -> None:
+        class _Bridge:
+            async def list_identities(self) -> list[BridgeIdentity]:
+                return [
+                    BridgeIdentity(
+                        algorithm="ssh-ed25519",
+                        comment="win-key",
+                        fingerprint="SHA256:test",
+                    )
+                ]
+
+        config.bitwarden.mode = "windows_bridge"
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            config=config,
+            windows_bridge=_Bridge(),  # type: ignore[arg-type]
+        )
+
+        task = await _start_control(server)
+        try:
+            resp = await _send_raw(
+                control_socket_path,
+                {"method": "unlock", "id": 1, "params": {}},
+            )
+            assert "result" in resp
+            result = resp["result"]
+            assert isinstance(result, dict)
+            assert result["unlocked"] is True
+            assert result["managed_by"] == "windows_app"
+            assert result["key_count"] == 1
+        finally:
+            server.shutdown()
+            await task
+
 
 class TestSyncMethod:
     @pytest.mark.asyncio
@@ -556,6 +597,38 @@ class TestSyncMethod:
             result2 = resp2["result"]
             assert isinstance(result2, dict)
             assert result2["synced"] is True
+        finally:
+            server.shutdown()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_sync_windows_bridge_mode_when_locked(
+        self,
+        runtime_dir: Path,
+        control_socket_path: Path,
+        config: BwsshConfig,
+    ) -> None:
+        class _Bridge:
+            async def list_identities(self) -> list[BridgeIdentity]:
+                return []
+
+        config.bitwarden.mode = "windows_bridge"
+        server = ControlServer(
+            runtime_dir=runtime_dir,
+            config=config,
+            windows_bridge=_Bridge(),  # type: ignore[arg-type]
+        )
+        task = await _start_control(server)
+        try:
+            resp = await _send_raw(
+                control_socket_path,
+                {"method": "sync", "id": 1, "params": {}},
+            )
+            assert "result" in resp
+            result = resp["result"]
+            assert isinstance(result, dict)
+            assert result["synced"] is False
+            assert result["managed_by"] == "windows_app"
         finally:
             server.shutdown()
             await task

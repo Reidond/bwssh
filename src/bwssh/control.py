@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from bwssh.bitwarden import BitwardenLike
     from bwssh.daemon import AgentServer
+    from bwssh.windows_bridge import BridgeIdentity, WindowsAgentBridge
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class ControlServer:
         polkit_available: bool = True,
         polkit_error: str | None = None,
         polkit: Authorizer | None = None,
+        windows_bridge: WindowsAgentBridge | None = None,
     ) -> None:
         self._runtime_dir = runtime_dir
         self._socket_path = runtime_dir / _CONTROL_SOCKET_NAME
@@ -59,6 +61,8 @@ class ControlServer:
         self._polkit_available = polkit_available
         self._polkit_error = polkit_error
         self._polkit: Authorizer = polkit or MockPolkitAuthorizer(always_allow=True)
+        self._windows_bridge = windows_bridge
+        self._bridge_keys: list[BridgeIdentity] = []
 
         if agent_server is not None:
             self._registry: KeyRegistry = agent_server.registry
@@ -95,6 +99,12 @@ class ControlServer:
         This is the single source of truth for locking.  Call this instead
         of ``AgentServer.lock()`` so the ``_locked`` flag stays in sync.
         """
+        if self._windows_bridge is not None:
+            self._bridge_keys = []
+            self._locked = True
+            logger.info("Agent locked (windows bridge)")
+            return
+
         if self._agent_server is not None:
             self._agent_server.lock()
         else:
@@ -193,18 +203,35 @@ class ControlServer:
 
     async def _handle_status(self, _params: dict[str, Any]) -> dict[str, Any]:
         uptime = time.monotonic() - self._start_time
+        key_count = (
+            len(self._bridge_keys)
+            if self._windows_bridge is not None
+            else len(self._registry.list_identities())
+        )
         result: dict[str, Any] = {
             "pid": os.getpid(),
             "uptime": uptime,
-            "key_count": len(self._registry.list_identities()),
+            "key_count": key_count,
             "locked": self._locked,
             "polkit_available": self._polkit_available,
+            "mode": self._config.bitwarden.mode,
         }
         if self._polkit_error:
             result["polkit_error"] = self._polkit_error
         return result
 
     async def _handle_list_keys(self, _params: dict[str, Any]) -> dict[str, Any]:
+        if self._windows_bridge is not None:
+            keys = [
+                {
+                    "fingerprint": identity.fingerprint,
+                    "comment": identity.comment,
+                    "algorithm": identity.algorithm,
+                }
+                for identity in self._bridge_keys
+            ]
+            return {"keys": keys}
+
         identities = self._registry.list_identities()
         keys = [
             {
@@ -221,6 +248,22 @@ class ControlServer:
         return {"locked": True}
 
     async def _handle_unlock(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._windows_bridge is not None:
+            await self.refresh_windows_bridge_state()
+            if self._locked:
+                return {
+                    "unlocked": False,
+                    "key_count": 0,
+                    "managed_by": "windows_app",
+                    "message": "Unlock Bitwarden on Windows to expose SSH keys.",
+                }
+            return {
+                "unlocked": True,
+                "key_count": len(self._bridge_keys),
+                "managed_by": "windows_app",
+                "message": "Windows app is unlocked.",
+            }
+
         # Check polkit authorization for unlock action
         if self._current_conn_ctx is not None and self._config.auth.require_polkit:
             authorized = await self._polkit.check_authorization(
@@ -261,6 +304,21 @@ class ControlServer:
         return {"unlocked": True}
 
     async def _handle_sync(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._windows_bridge is not None:
+            await self.refresh_windows_bridge_state()
+            if self._locked:
+                return {
+                    "synced": False,
+                    "key_count": 0,
+                    "managed_by": "windows_app",
+                    "message": "Windows app is still locked.",
+                }
+            return {
+                "synced": True,
+                "key_count": len(self._bridge_keys),
+                "managed_by": "windows_app",
+            }
+
         # Use provided session_key or fall back to stored session
         session_key = params.get("session_key")
         if not session_key and self._bitwarden is not None:
@@ -315,6 +373,40 @@ class ControlServer:
     def shutdown(self) -> None:
         if self._shutdown_event is not None:
             self._shutdown_event.set()
+
+    async def refresh_windows_bridge_state(self) -> None:
+        """Refresh cached identity list from Windows bridge mode."""
+        if self._windows_bridge is None:
+            return
+
+        try:
+            identities = await self._windows_bridge.list_identities()
+        except Exception:
+            logger.debug("Bridge identity refresh failed", exc_info=True)
+            identities = []
+
+        was_locked = self._locked
+        self._bridge_keys = identities
+        self._locked = len(identities) == 0
+        if was_locked and not self._locked:
+            logger.info("Windows bridge auto-unlocked with %d key(s)", len(identities))
+        if not was_locked and self._locked:
+            logger.info("Windows bridge auto-locked")
+
+    async def auto_unlock_watcher(
+        self, shutdown_event: asyncio.Event, poll_seconds: int
+    ) -> None:
+        """Periodically refresh bridge state to auto-lock/unlock."""
+        if self._windows_bridge is None:
+            return
+
+        interval = max(1, poll_seconds)
+        while not shutdown_event.is_set():
+            await self.refresh_windows_bridge_state()
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=interval)
+            except TimeoutError:
+                continue
 
 
 class ControlClient:
