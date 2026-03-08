@@ -25,6 +25,12 @@ bw_path = "bw"
 # Discovery mode: "explicit" (list item_ids) or "query" (future)
 mode = "explicit"
 
+# WSL mode: proxy to a Windows SSH agent via named-pipe relay.
+# Requires a relay binary like npiperelay.exe in PATH.
+# mode = "windows_bridge"
+# windows_pipe_command = ["npiperelay.exe", "-ei", "-s", "//./pipe/openssh-ssh-agent"]
+# auto_unlock_poll_seconds = 5
+
 # Bitwarden item IDs containing SSH keys
 # Get IDs from: bw list items --session <session_key>
 item_ids = []

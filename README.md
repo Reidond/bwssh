@@ -13,7 +13,7 @@ them seamlessly with any SSH client.
 
 ## Requirements
 
--   Linux with systemd user services
+-   Linux with systemd user services (including WSL2)
 -   Python 3.12+
 -   Bitwarden CLI (`bw`) installed and logged in
 
@@ -90,6 +90,7 @@ log_level = "INFO"
 
 [bitwarden]
 bw_path = "/usr/bin/bw"
+mode = "explicit"
 item_ids = [
     "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
 ]
@@ -106,6 +107,26 @@ allow_ed25519 = true
 allow_ecdsa = true
 allow_rsa = true
 ```
+
+### WSL2 + Windows Bitwarden app mode
+
+If you already use Bitwarden/SSH agent on Windows, you can run bwssh in
+bridge mode so WSL tools use that agent state.
+
+```toml
+[bitwarden]
+mode = "windows_bridge"
+windows_pipe_command = ["npiperelay.exe", "-ei", "-s", "//./pipe/openssh-ssh-agent"]
+auto_unlock_poll_seconds = 5
+```
+
+Behavior in this mode:
+
+- `bwssh unlock` does not ask for a password in WSL.
+- It reports whether Windows is already unlocked or asks you to unlock in the
+  Windows app.
+- The daemon polls automatically and switches between locked/unlocked when the
+  Windows app state changes.
 
 ### Environment Variables
 

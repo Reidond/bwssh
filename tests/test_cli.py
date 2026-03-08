@@ -221,6 +221,23 @@ class TestInstallCommand:
 
 
 class TestUnlockCommand:
+    def test_unlock_windows_bridge_mode_prints_message(self, runner: CliRunner) -> None:
+        cfg = BwsshConfig(bitwarden=BitwardenConfig(mode="windows_bridge"))
+        with (
+            patch("bwssh.cli.load_config", return_value=cfg),
+            patch(
+                "bwssh.cli._send_command",
+                return_value={
+                    "unlocked": False,
+                    "message": "Unlock Bitwarden on Windows to expose SSH keys.",
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["unlock"])
+
+        assert result.exit_code == 0
+        assert "unlock bitwarden on windows" in result.output.lower()
+
     def test_unlock_via_env_session(self, runner: CliRunner) -> None:
         """Unlock with BW_SESSION env var sends to daemon directly."""
         unlock_params = {

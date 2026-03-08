@@ -47,6 +47,8 @@ class TestBitwardenConfig:
         assert config.bw_path == "bw"
         assert config.mode == "explicit"
         assert config.item_ids == []
+        assert config.windows_pipe_command
+        assert config.auto_unlock_poll_seconds == 5
 
     def test_custom_values(self) -> None:
         """Test BitwardenConfig with custom values."""
@@ -220,6 +222,22 @@ item_ids = ["uuid-1", "uuid-2", "uuid-3"]
 
         config = load_config(config_file)
         assert config.bitwarden.item_ids == ["uuid-1", "uuid-2", "uuid-3"]
+
+    def test_bitwarden_windows_bridge_options_from_config(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """
+[bitwarden]
+mode = "windows_bridge"
+windows_pipe_command = ["npiperelay.exe", "-ei", "-s", "//./pipe/custom-agent"]
+auto_unlock_poll_seconds = 3
+"""
+        )
+
+        config = load_config(config_file)
+        assert config.bitwarden.mode == "windows_bridge"
+        assert config.bitwarden.windows_pipe_command[-1] == "//./pipe/custom-agent"
+        assert config.bitwarden.auto_unlock_poll_seconds == 3
 
     def test_env_override_runtime_dir(
         self, tmp_path: Path, monkeypatch: MonkeyPatch
